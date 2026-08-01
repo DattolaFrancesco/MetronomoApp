@@ -31,10 +31,17 @@ const SILENCE_FLOOR_DB = -50;
 // acoustic guitar picked at a moderate, sustained volume, not just sharp
 // percussive transients like a handclap) still clear it reliably. Anything
 // under this is treated as ambient noise and ignored everywhere (status
-// flash, waveform accent, report).
-const MIN_PEAK_AMPLITUDE = 0.4;
+// flash, waveform accent, report). Exported so the debug chart can draw it
+// as a reference line.
+export const MIN_PEAK_AMPLITUDE = 0.4;
+// Floor for a sample to be worth surfacing at all in the debug chart's
+// rejected-peaks list — well below MIN_PEAK_AMPLITUDE, so genuinely
+// near-silent noise-floor jitter still isn't logged (it would just be
+// visual spam), but a real, audible-but-too-quiet tap still shows up
+// instead of vanishing without a trace.
+const DEBUG_CANDIDATE_FLOOR = 0.15;
 
-const BEATS_PER_BAR = 4;
+export const BEATS_PER_BAR = 4;
 
 // The peak-capture window around each beat adapts to tempo (40% of the
 // beat-to-beat interval each side), clamped to a sane range for very
@@ -52,8 +59,9 @@ const STATUS_HOLD_MS = 180;
 // The mic also picks up the metronome's own click from the phone speaker.
 // We know the exact instant the native engine fires each click (the onBeat
 // timestamp), so we gate out samples for a short window right after it and
-// only resume peak search once the gate has closed.
-const CLICK_GATE_MS = 18;
+// only resume peak search once the gate has closed. Exported so the debug
+// chart can shade exactly the interval actually used at runtime.
+export const CLICK_GATE_MS = 18;
 
 // Decimated (bucket-max) amplitude history kept for the full-session
 // waveform shown later in the report — far coarser than the 20ms poll rate
@@ -73,12 +81,40 @@ export type OnsetEvent = {
   deltaMs: number;
   status: OnsetStatus;
   beatIndex: number;
+  // Normalized (0-1) amplitude of the accepted onset sample — debug-chart
+  // only (not shown in the main user-facing report).
+  amplitude: number;
+};
+
+// Why a candidate peak inside a beat's capture window never became an
+// accepted OnsetEvent. "clickMatch" is reserved for a spectral/envelope
+// template-match rejection layer (compares the candidate against a known
+// click "signature") that isn't wired into this build's detection pipeline
+// right now — it's kept here so the debug chart already has a slot ready
+// for it, but nothing currently ever produces it.
+export type PeakRejectReason = "belowThreshold" | "gated" | "clickMatch";
+
+export type RejectedPeak = {
+  id: number;
+  elapsedMs: number;
+  amplitude: number;
+  reason: PeakRejectReason;
+  beatIndex: number;
+  // Signed offset from the beat this peak's window belonged to (negative =
+  // before the beat, positive = after) — same convention as OnsetEvent.deltaMs.
+  deltaMs: number;
 };
 
 export type SessionSummary = {
   events: OnsetEvent[];
+  // Every candidate peak that had a beat's capture window open but didn't
+  // end up accepted — debug-chart only. See RejectedPeak/PeakRejectReason.
+  rejectedPeaks: RejectedPeak[];
   durationMs: number;
   toleranceMs: number;
+  // BPM the session was recorded at — debug-chart only, needed to redraw
+  // the expected quarter/eighth beat grid against the raw waveform.
+  bpm: number;
   // Decimated amplitude history for the whole session, one entry per
   // WAVEFORM_SAMPLE_INTERVAL_MS bucket, for drawing the static full-session
   // waveform in the report. Index i covers [i, i+1) * WAVEFORM_SAMPLE_INTERVAL_MS
@@ -97,6 +133,16 @@ type PendingBeat = {
   // string) can keep growing louder well after the true attack, which would
   // otherwise report the onset later than it actually was.
   onsetTime: number | null;
+  // Amplitude at onsetTime, captured at the same instant onsetTime is set —
+  // debug-chart only (OnsetEvent.amplitude).
+  onsetAmp: number | null;
+  // Loudest sample seen anywhere in this window, gated or not — the only
+  // way a gated-away hit (which never touches recentSamplesRef at all) is
+  // still visible to the debug chart once the window closes. Also doubles
+  // as the "belowThreshold" amplitude when nothing here ever reached
+  // MIN_PEAK_AMPLITUDE.
+  peakAmp: number;
+  peakTime: number | null;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -214,6 +260,8 @@ export default function SyncRecorder({
   const sessionStartRef = useRef<number | null>(null);
   const sessionEventsRef = useRef<OnsetEvent[]>([]);
   const eventIdRef = useRef(0);
+  const sessionRejectedPeaksRef = useRef<RejectedPeak[]>([]);
+  const rejectedPeakIdRef = useRef(0);
   const waveformRef = useRef<number[]>([]);
   const waveformBucketIndexRef = useRef(-1);
   const waveformBucketMaxRef = useRef(0);
@@ -300,20 +348,37 @@ export default function SyncRecorder({
     const windowEnd = beatTime + windowHalf;
 
     let onsetTime: number | null = null;
+    let onsetAmp: number | null = null;
+    let peakAmp = 0;
+    let peakTime: number | null = null;
     for (const sample of recentSamplesRef.current) {
-      if (
-        sample.time >= windowStart &&
-        sample.time <= windowEnd &&
-        sample.amp >= MIN_PEAK_AMPLITUDE &&
-        (onsetTime === null || sample.time < onsetTime)
-      ) {
-        onsetTime = sample.time;
+      if (sample.time >= windowStart && sample.time <= windowEnd) {
+        if (sample.amp > peakAmp) {
+          peakAmp = sample.amp;
+          peakTime = sample.time;
+        }
+        if (
+          sample.amp >= MIN_PEAK_AMPLITUDE &&
+          (onsetTime === null || sample.time < onsetTime)
+        ) {
+          onsetTime = sample.time;
+          onsetAmp = sample.amp;
+        }
       }
     }
 
     pendingBeatsRef.current = [
       ...pendingBeatsRef.current,
-      { beatIndex, beatTime, windowStart, windowEnd, onsetTime },
+      {
+        beatIndex,
+        beatTime,
+        windowStart,
+        windowEnd,
+        onsetTime,
+        onsetAmp,
+        peakAmp,
+        peakTime,
+      },
     ];
   }
 
@@ -355,6 +420,28 @@ export default function SyncRecorder({
             deltaMs: delta,
             status,
             beatIndex: point.beatIndex,
+            amplitude: point.onsetAmp ?? 0,
+          });
+        }
+      } else if (sessionStartRef.current !== null && point.peakTime !== null) {
+        // Nothing cleared the onset threshold in this window — but if
+        // something loud enough to matter happened anyway, log *why* it
+        // didn't count instead of just silently dropping it. A peak that
+        // reached MIN_PEAK_AMPLITUDE but still has no onsetTime can only
+        // mean it happened while the click gate was active (any ungated
+        // sample clearing the threshold would already have set onsetTime
+        // above) — everything quieter than that is a near-miss below the
+        // real acceptance threshold.
+        const reason: PeakRejectReason =
+          point.peakAmp >= MIN_PEAK_AMPLITUDE ? "gated" : "belowThreshold";
+        if (point.peakAmp >= DEBUG_CANDIDATE_FLOOR) {
+          sessionRejectedPeaksRef.current.push({
+            id: rejectedPeakIdRef.current++,
+            elapsedMs: point.peakTime - sessionStartRef.current,
+            amplitude: point.peakAmp,
+            reason,
+            beatIndex: point.beatIndex,
+            deltaMs: point.peakTime - point.beatTime,
           });
         }
       }
@@ -380,22 +467,27 @@ export default function SyncRecorder({
       ) {
         recent.shift();
       }
-
-      // Locks in the *first* sample that clears the threshold and ignores
-      // every later one for that window, even if louder — see the
-      // PendingBeat.onsetTime comment for why.
-      pendingBeatsRef.current = pendingBeatsRef.current.map((point) => {
-        if (
-          point.onsetTime === null &&
-          now >= point.windowStart &&
-          now <= point.windowEnd &&
-          norm >= MIN_PEAK_AMPLITUDE
-        ) {
-          return { ...point, onsetTime: now };
-        }
-        return point;
-      });
     }
+
+    // Tracks each pending window's loudest sample regardless of gating —
+    // the only way a gated-away hit is still visible to the debug chart
+    // once the window closes (see PendingBeat.peakAmp) — and, only when
+    // ungated, locks in the *first* sample that clears the real acceptance
+    // threshold, ignoring every later one for that window even if louder
+    // (see the PendingBeat.onsetTime comment for why).
+    pendingBeatsRef.current = pendingBeatsRef.current.map((point) => {
+      if (now < point.windowStart || now > point.windowEnd) return point;
+
+      let next = point;
+      if (norm > next.peakAmp) {
+        next = { ...next, peakAmp: norm, peakTime: now };
+      }
+      if (!gated && next.onsetTime === null && norm >= MIN_PEAK_AMPLITUDE) {
+        next = { ...next, onsetTime: now, onsetAmp: norm };
+      }
+      return next;
+    });
+
     finalizePendingBeats(now);
 
     // Bucket the raw (ungated) amplitude into WAVEFORM_SAMPLE_INTERVAL_MS
@@ -470,6 +562,8 @@ export default function SyncRecorder({
     sessionStartRef.current = now;
     sessionEventsRef.current = [];
     eventIdRef.current = 0;
+    sessionRejectedPeaksRef.current = [];
+    rejectedPeakIdRef.current = 0;
     waveformRef.current = [];
     waveformBucketIndexRef.current = -1;
     waveformBucketMaxRef.current = 0;
@@ -589,12 +683,15 @@ export default function SyncRecorder({
 
         onSessionEndRef.current?.({
           events: sessionEventsRef.current,
+          rejectedPeaks: sessionRejectedPeaksRef.current,
           durationMs: Date.now() - sessionStartRef.current,
           toleranceMs: toleranceRef.current,
+          bpm: bpmRef.current,
           waveform: waveformRef.current,
         });
         sessionStartRef.current = null;
         sessionEventsRef.current = [];
+        sessionRejectedPeaksRef.current = [];
         waveformRef.current = [];
       }
     };

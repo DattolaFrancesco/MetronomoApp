@@ -1,10 +1,10 @@
 import DarkPanel from "@/components/dark-panel";
+import DebugChart from "@/components/debug-chart";
 import type { OnsetEvent, SessionSummary } from "@/components/sync-recorder";
 import { useMemo } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const BEAT_LABELS = ["1", "2", "3", "4"];
 const BEATS_PER_BAR = 4;
 
 // Rhythm (percussion) staff: a single line, quarter notes only (this app
@@ -44,11 +44,6 @@ const STATUS_META: Record<OnsetEvent["status"], { color: string; label: string }
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function formatSigned(value: number) {
-  const rounded = Math.round(value);
-  return `${rounded > 0 ? "+" : ""}${rounded} ms`;
 }
 
 type SessionReportProps = {
@@ -201,34 +196,12 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
         </DarkPanel>
       )}
 
-      {summary.events.length > 0 && (
-        <DarkPanel className="px-5 py-4 gap-1">
-          <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest mb-2">
-            Dettaglio colpi
-          </Text>
-          {summary.events.map((event) => (
-            <View
-              key={event.id}
-              className="flex-row items-center justify-between py-2 border-b border-white/5"
-            >
-              <View className="flex-row items-center gap-2 w-20">
-                <Text className="text-neutral-500 text-xs font-mono">
-                  {BEAT_LABELS[event.beatIndex]}
-                </Text>
-              </View>
-              <Text
-                className="text-xs font-semibold"
-                style={{ color: STATUS_META[event.status].color }}
-              >
-                {STATUS_META[event.status].label}
-              </Text>
-              <Text className="text-white text-xs font-mono w-16 text-right">
-                {formatSigned(event.deltaMs)}
-              </Text>
-            </View>
-          ))}
-        </DarkPanel>
-      )}
+      <DarkPanel className="px-4 py-4 gap-3 w-full">
+        <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+          Debug / Dati tecnici
+        </Text>
+        <DebugChart summary={summary} />
+      </DarkPanel>
 
       <Pressable
         onPress={onNewSession}
