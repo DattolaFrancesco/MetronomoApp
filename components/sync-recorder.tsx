@@ -32,7 +32,7 @@ const SILENCE_FLOOR_DB = -50;
 // percussive transients like a handclap) still clear it reliably. Anything
 // under this is treated as ambient noise and ignored everywhere (status
 // flash, waveform accent, report).
-const MIN_PEAK_AMPLITUDE = 0.55;
+const MIN_PEAK_AMPLITUDE = 0.4;
 
 const BEATS_PER_BAR = 4;
 
