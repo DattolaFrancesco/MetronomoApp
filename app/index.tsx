@@ -1,6 +1,7 @@
 import BeatIndicator from "@/components/beat-indicator";
 import DarkPanel from "@/components/dark-panel";
 import SessionReport from "@/components/session-report";
+import SessionSetup, { type SetupSubdivision } from "@/components/session-setup";
 import SyncRecorder, {
   type OnsetStatus,
   type SessionSummary,
@@ -71,6 +72,13 @@ export default function Home() {
   const [syncStatus, setSyncStatus] = useState<OnsetStatus | null>(null);
   const [syncOffsetMs, setSyncOffsetMs] = useState<number | null>(null);
 
+  // UI-only setup step, shown before every session — no wiring to bpm/phase
+  // or the metronome engine yet, just local visual selection state (see
+  // components/session-setup.tsx).
+  const [showSetup, setShowSetup] = useState(true);
+  const [setupBars, setSetupBars] = useState(1);
+  const [setupSubdivision, setSetupSubdivision] = useState<SetupSubdivision>("quarter");
+
   const phaseRef = useRef<Phase>("idle");
   const insets = useSafeAreaInsets();
 
@@ -113,6 +121,7 @@ export default function Home() {
       await stop();
       setPhase("idle");
       setCountInBeat(null);
+      setShowSetup(true);
     } else {
       setReport(null);
       setSyncStatus(null);
@@ -121,6 +130,17 @@ export default function Home() {
       setPhase("countIn");
       await start(bpm);
     }
+  };
+
+  // Placeholder for now — no real session-start logic connected yet (see
+  // components/session-setup.tsx). Just leaves the setup step and reveals
+  // the existing metronome screen underneath.
+  const handleSetupStart = () => {
+    console.log("Inizia sessione (placeholder)", {
+      bars: setupBars,
+      subdivision: setupSubdivision,
+    });
+    setShowSetup(false);
   };
 
   const changeBpm = (delta: number) => {
@@ -155,7 +175,30 @@ export default function Home() {
   if (report) {
     return (
       <View className="flex-1 bg-black">
-        <SessionReport summary={report} onNewSession={() => setReport(null)} />
+        <SessionReport
+          summary={report}
+          onNewSession={() => {
+            setReport(null);
+            setShowSetup(true);
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (showSetup) {
+    return (
+      <View
+        className="flex-1 bg-black px-5 justify-center"
+        style={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }}
+      >
+        <SessionSetup
+          bars={setupBars}
+          onBarsChange={setSetupBars}
+          subdivision={setupSubdivision}
+          onSubdivisionChange={setSetupSubdivision}
+          onStart={handleSetupStart}
+        />
       </View>
     );
   }
