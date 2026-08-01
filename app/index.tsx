@@ -132,15 +132,24 @@ export default function Home() {
     }
   };
 
-  // Placeholder for now — no real session-start logic connected yet (see
-  // components/session-setup.tsx). Just leaves the setup step and reveals
-  // the existing metronome screen underneath.
+  // Leaves the setup step and reveals the metronome screen underneath —
+  // setupBars is now wired to the real session (passed to SyncRecorder as
+  // maxBars below); setupSubdivision is still UI-only, not connected yet.
   const handleSetupStart = () => {
-    console.log("Inizia sessione (placeholder)", {
-      bars: setupBars,
-      subdivision: setupSubdivision,
-    });
     setShowSetup(false);
+  };
+
+  // SyncRecorder calls this once, synchronously, the instant the bars
+  // chosen on the setup screen have elapsed — it only knows about
+  // beats/audio, not the native engine, so actually stopping it lives here.
+  // Manual Stop (the red button, via togglePlay above) still works at any
+  // time regardless — this is an additional automatic trigger for the same
+  // stop path, not a replacement for it.
+  const handleLimitReached = () => {
+    stop();
+    setPhase("idle");
+    setCountInBeat(null);
+    setShowSetup(true);
   };
 
   const changeBpm = (delta: number) => {
@@ -266,9 +275,11 @@ export default function Home() {
           isArmed={phase !== "idle"}
           countInBeats={COUNT_IN_BEATS}
           bpm={bpm}
+          maxBars={setupBars}
           onSessionEnd={handleSessionEnd}
           onStatusChange={handleStatusChange}
           onRecordingStart={handleRecordingStart}
+          onLimitReached={handleLimitReached}
         />
 
         <View className="items-center">

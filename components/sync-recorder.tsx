@@ -208,6 +208,11 @@ type SyncRecorderProps = {
   countInBeats?: number;
   bpm: number;
   toleranceMs?: number;
+  // Fixed number of bars to auto-stop after (chosen on the setup screen).
+  // Undefined means no auto-stop — the caller must stop manually. This is a
+  // behavior change from the previous unlimited-until-Stop session: when
+  // set, the session now always ends itself after exactly this many bars.
+  maxBars?: number;
   onSessionEnd?: (summary: SessionSummary) => void;
   onStatusChange?: (
     status: OnsetStatus | null,
@@ -217,6 +222,15 @@ type SyncRecorderProps = {
   // caller can update its own UI (e.g. swap a count-in display for a
   // status label) — not on the audio-timing critical path.
   onRecordingStart?: () => void;
+  // Fired synchronously, exactly once, the instant maxBars worth of native
+  // beats have elapsed since recording started. This component only tracks
+  // beats/audio — it has no handle on the native engine's start()/stop(),
+  // so the caller is responsible for actually stopping it (and flipping
+  // isArmed false, which is what triggers onSessionEnd below). Manual stop
+  // (the caller flipping isArmed false itself, e.g. a Stop button) still
+  // works at any time regardless of maxBars — this only adds an automatic
+  // trigger for the same teardown path, it doesn't replace manual stop.
+  onLimitReached?: () => void;
 };
 
 export default function SyncRecorder({
@@ -224,9 +238,11 @@ export default function SyncRecorder({
   countInBeats = 0,
   bpm,
   toleranceMs = DEFAULT_TOLERANCE_MS,
+  maxBars,
   onSessionEnd,
   onStatusChange,
   onRecordingStart,
+  onLimitReached,
 }: SyncRecorderProps) {
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
@@ -244,6 +260,12 @@ export default function SyncRecorder({
 
   const toleranceRef = useRef(toleranceMs);
   const bpmRef = useRef(bpm);
+  const maxBarsRef = useRef(maxBars);
+  const onLimitReachedRef = useRef(onLimitReached);
+  // Native beat number (since the engine's own start()) of the beat that
+  // started the tracked session — lets the onBeat handler compute "how many
+  // beats into the session are we" without any extra counter of its own.
+  const recordingStartBeatRef = useRef<number | null>(null);
   const pendingBeatRef = useRef<BeatAccent | null>(null);
 
   // Rolling short history of recent samples, so the peak search opened by a
@@ -297,6 +319,14 @@ export default function SyncRecorder({
   useEffect(() => {
     bpmRef.current = bpm;
   }, [bpm]);
+
+  useEffect(() => {
+    maxBarsRef.current = maxBars;
+  }, [maxBars]);
+
+  useEffect(() => {
+    onLimitReachedRef.current = onLimitReached;
+  }, [onLimitReached]);
 
   useEffect(() => {
     onSessionEndRef.current = onSessionEnd;
@@ -559,6 +589,7 @@ export default function SyncRecorder({
     if (beat < countInBeatsRef.current) return;
 
     recordingStartedRef.current = true;
+    recordingStartBeatRef.current = beat;
     sessionStartRef.current = now;
     sessionEventsRef.current = [];
     eventIdRef.current = 0;
@@ -583,6 +614,23 @@ export default function SyncRecorder({
 
         // Resolve any straggling windows early (only possible at very fast tempos).
         finalizePendingBeats(now);
+
+        // Auto-stop (setup screen's bars count): once maxBars worth of
+        // native beats have played since the tracked session started, this
+        // beat itself is one past the limit — finalizePendingBeats above
+        // has already had a full beat interval to resolve the true last
+        // beat's window, so it's safe to bail here without opening a new
+        // one. The caller stops the engine; onSessionEnd fires from the
+        // teardown that triggers (same path a manual Stop already uses).
+        if (
+          recordingStartedRef.current &&
+          maxBarsRef.current != null &&
+          recordingStartBeatRef.current !== null &&
+          beat - recordingStartBeatRef.current >= maxBarsRef.current * BEATS_PER_BAR
+        ) {
+          onLimitReachedRef.current?.();
+          return;
+        }
 
         const beatIndex = beat % BEATS_PER_BAR;
         const windowHalf = currentWindowHalfMs(currentBeatIntervalMs());
@@ -667,6 +715,7 @@ export default function SyncRecorder({
       preparedRef.current = false;
       audioStartedRef.current = false;
       recordingStartedRef.current = false;
+      recordingStartBeatRef.current = null;
       lastBeatRef.current = -1;
       amplitudesSV.value = new Array(HISTORY_SIZE).fill(0);
       accentsSV.value = new Array(HISTORY_SIZE).fill(null);
