@@ -1,9 +1,11 @@
 import {
   BEATS_PER_BAR,
+  SUBDIVISION_STEPS,
   WAVEFORM_SAMPLE_INTERVAL_MS,
   type OnsetStatus,
   type SessionSummary,
 } from "@/components/sync-recorder";
+import { Canvas, Path, Skia } from "@shopify/react-native-skia";
 import { useMemo, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -13,10 +15,12 @@ import Animated, {
   runOnJS,
 } from "react-native-reanimated";
 
-// Dev/QA-only visualization: two vertical lines per beat and nothing else —
-// the fixed grid line marks the expected quarter, the solid onset line marks
-// where the mic actually detected the hit. The horizontal gap between them
-// *is* the early/on-time/late signal; no labels needed.
+// Dev/QA-only visualization, drawn on a single Skia canvas: a smooth filled
+// mic-level waveform, the fixed grid of expected beat/sub-beat positions,
+// and one line per accepted onset (green on time, red otherwise). Numeric
+// labels stay plain RN Text, absolutely positioned over the canvas — Skia
+// text needs a loaded font, which buys nothing over RN's own text layout
+// for a handful of small numbers.
 
 const CHART_HEIGHT = 220;
 const TOP_LABEL_LANE = 34; // reserved strip above the chart for bar/beat labels
@@ -31,8 +35,8 @@ const MAX_PX_PER_MS = 1.6;
 
 const BARLINE_COLOR = "rgba(255,255,255,0.6)";
 const QUARTER_TICK_COLOR = "#FFFFFF";
-const EIGHTH_TICK_COLOR = "rgba(255,255,255,0.14)";
-const WAVEFORM_BAR_COLOR = "rgba(57,255,106,0.35)";
+const SUB_TICK_COLOR = "rgba(255,255,255,0.14)";
+const WAVEFORM_FILL_COLOR = "rgba(57,255,106,0.35)";
 
 // Onset line color follows the same on-time/early/late classification
 // already computed in sync-recorder.tsx (OnsetEvent.status, against
@@ -44,9 +48,13 @@ const ONSET_STATUS_COLOR: Record<OnsetStatus, string> = {
   late: "#FF453A",
 };
 
-type GridTick =
-  | { type: "quarter"; time: number; isBarStart: boolean; barNumber: number; label: string }
-  | { type: "eighth"; time: number; label: string };
+type GridTick = {
+  type: "quarter" | "sub";
+  time: number;
+  isBarStart: boolean;
+  barNumber: number;
+  label: string;
+};
 
 type DebugChartProps = {
   summary: SessionSummary;
@@ -87,184 +95,186 @@ export default function DebugChart({ summary }: DebugChartProps) {
     summary.waveform.length * WAVEFORM_SAMPLE_INTERVAL_MS,
   );
   const contentWidth = Math.max(1, totalMs * pxPerMs);
+  const canvasHeight = CHART_TOTAL_HEIGHT + 40;
 
   const grid = useMemo(() => {
     const ticks: GridTick[] = [];
     const beatIntervalMs = 60000 / summary.bpm;
     if (!Number.isFinite(beatIntervalMs) || beatIntervalMs <= 0) return ticks;
 
+    const steps = SUBDIVISION_STEPS[summary.subdivision];
+    const subIntervalMs = beatIntervalMs / steps;
     const lastQuarter = Math.ceil(totalMs / beatIntervalMs) + 1;
+
+    // Eighths are the one case that keeps the plain beat number on the
+    // quarter itself — the quarter is still real, just not what's
+    // evaluated (see "il levare" elsewhere). Triplet/sixteenth relabel
+    // the quarter as their own first sub-position ("N-1") so all of a
+    // beat's points share one consistent beat-subdivision scheme.
+    const usesBeatSubdivisionScheme =
+      summary.subdivision === "triplet" || summary.subdivision === "sixteenth";
+
     for (let i = 0; i <= lastQuarter; i++) {
       const quarterTime = i * beatIntervalMs;
       const quarterInBar = i % BEATS_PER_BAR;
+      const beatNumber = quarterInBar + 1;
+
       ticks.push({
         type: "quarter",
         time: quarterTime,
         isBarStart: quarterInBar === 0,
         barNumber: Math.floor(i / BEATS_PER_BAR) + 1,
-        label: String(quarterInBar + 1),
+        label: usesBeatSubdivisionScheme ? `${beatNumber}-1` : String(beatNumber),
       });
-      const eighthTime = quarterTime + beatIntervalMs / 2;
-      if (eighthTime <= totalMs + beatIntervalMs) {
-        ticks.push({
-          type: "eighth",
-          time: eighthTime,
-          label: `${quarterInBar + 1}.5`,
-        });
+
+      for (let sub = 1; sub < steps; sub++) {
+        const subTime = quarterTime + sub * subIntervalMs;
+        if (subTime > totalMs + beatIntervalMs) continue;
+        const label =
+          summary.subdivision === "eighth" ? `${beatNumber}-5` : `${beatNumber}-${sub + 1}`;
+        ticks.push({ type: "sub", time: subTime, isBarStart: false, barNumber: 0, label });
       }
     }
     return ticks;
-  }, [summary.bpm, totalMs]);
+  }, [summary.bpm, summary.subdivision, totalMs]);
+
+  // Smooth filled waveform: each 50ms bucket becomes a point, adjacent
+  // points joined through their shared midpoint with a quadratic curve
+  // (the standard "smooth line chart" trick) instead of discrete bars —
+  // same amplitude data as the live "Input audio" view, just a fluid
+  // silhouette here rather than rectangles.
+  const waveformPath = useMemo(() => {
+    const path = Skia.Path.Make();
+    const baseline = TOP_LABEL_LANE + CHART_HEIGHT;
+    if (summary.waveform.length === 0) return path;
+
+    const points = summary.waveform.map((amp, i) => ({
+      x: i * WAVEFORM_SAMPLE_INTERVAL_MS * pxPerMs,
+      y: baseline - Math.max(1, amp * CHART_HEIGHT),
+    }));
+
+    path.moveTo(0, baseline);
+    path.lineTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const curr = points[i];
+      path.quadTo(prev.x, prev.y, (prev.x + curr.x) / 2, (prev.y + curr.y) / 2);
+    }
+    const last = points[points.length - 1];
+    path.lineTo(last.x, last.y);
+    path.lineTo(last.x, baseline);
+    path.close();
+    return path;
+  }, [summary.waveform, pxPerMs]);
+
+  // Grid/onset lines grouped by color into as few Paths as possible (one
+  // draw call per group instead of one per line) — plenty fast already at
+  // this session length (capped at 4 bars), but free to keep simple.
+  const barlinePath = useMemo(() => {
+    const path = Skia.Path.Make();
+    for (const t of grid) {
+      if (!t.isBarStart) continue;
+      const x = t.time * pxPerMs;
+      path.moveTo(x, 0);
+      path.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
+    }
+    return path;
+  }, [grid, pxPerMs]);
+
+  const quarterTickPath = useMemo(() => {
+    const path = Skia.Path.Make();
+    for (const t of grid) {
+      if (t.type !== "quarter") continue;
+      const x = t.time * pxPerMs;
+      path.moveTo(x, TOP_LABEL_LANE);
+      path.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
+    }
+    return path;
+  }, [grid, pxPerMs]);
+
+  const subTickPath = useMemo(() => {
+    const path = Skia.Path.Make();
+    for (const t of grid) {
+      if (t.type !== "sub") continue;
+      const x = t.time * pxPerMs;
+      path.moveTo(x, TOP_LABEL_LANE);
+      path.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
+    }
+    return path;
+  }, [grid, pxPerMs]);
+
+  const onTimePath = useMemo(() => {
+    const path = Skia.Path.Make();
+    for (const event of summary.events) {
+      if (event.status !== "onTime") continue;
+      const x = (event.elapsedMs + event.deltaMs) * pxPerMs;
+      path.moveTo(x, TOP_LABEL_LANE);
+      path.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
+    }
+    return path;
+  }, [summary.events, pxPerMs]);
 
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        Griglia beat attesi. Per ogni colpo accettato, una linea verticale
-        (verde se a tempo, rossa altrimenti) segna il timestamp reale del
-        picco rilevato dal microfono — la distanza dalla linea del quarto più
-        vicino è lo scarto in anticipo/ritardo. Pizzica per zoomare, scorri in
-        orizzontale per navigare.
+        Griglia beat attesi. Per ogni colpo a tempo, una linea verticale verde
+        segna il timestamp reale del picco rilevato dal microfono. Pizzica per
+        zoomare, scorri in orizzontale per navigare.
       </Text>
 
       <View className="flex-row flex-wrap gap-x-3 gap-y-1">
-        <LegendLine color={WAVEFORM_BAR_COLOR} label="livello microfono" />
+        <LegendLine color={WAVEFORM_FILL_COLOR} label="livello microfono" />
         <LegendLine color={QUARTER_TICK_COLOR} label="beat atteso" />
         <LegendLine color={ONSET_STATUS_COLOR.onTime} label="colpo a tempo" />
-        <LegendLine color={ONSET_STATUS_COLOR.early} label="colpo non a tempo" />
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: CHART_TOTAL_HEIGHT + 40 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: canvasHeight }}>
         <GestureDetector gesture={pinchGesture}>
-          <Animated.View style={[{ width: contentWidth, height: CHART_TOTAL_HEIGHT + 40 }, previewStyle]}>
-            {/* Mic level for the whole session — same raw amplitude source
-                and bucketing as the live "Input audio" waveform during
-                recording (see WAVEFORM_SAMPLE_INTERVAL_MS in
-                sync-recorder.tsx), just re-rendered here against the full
-                session timeline. Drawn first so the grid/onset lines above
-                stay legible on top of it. */}
-            {summary.waveform.map((amp, i) => {
-              const barHeight = Math.max(1, amp * CHART_HEIGHT);
-              return (
-                <View
-                  key={`wf-${i}`}
-                  pointerEvents="none"
-                  style={{
-                    position: "absolute",
-                    left: i * WAVEFORM_SAMPLE_INTERVAL_MS * pxPerMs,
-                    top: TOP_LABEL_LANE + CHART_HEIGHT - barHeight,
-                    width: Math.max(1, WAVEFORM_SAMPLE_INTERVAL_MS * pxPerMs - 1),
-                    height: barHeight,
-                    backgroundColor: WAVEFORM_BAR_COLOR,
-                  }}
-                />
-              );
-            })}
+          <Animated.View style={[{ width: contentWidth, height: canvasHeight }, previewStyle]}>
+            <Canvas style={{ width: contentWidth, height: canvasHeight }}>
+              <Path path={waveformPath} color={WAVEFORM_FILL_COLOR} style="fill" />
+              <Path path={subTickPath} color={SUB_TICK_COLOR} style="stroke" strokeWidth={1} />
+              <Path path={quarterTickPath} color={QUARTER_TICK_COLOR} style="stroke" strokeWidth={1} />
+              <Path path={barlinePath} color={BARLINE_COLOR} style="stroke" strokeWidth={2} />
+              <Path path={onTimePath} color={ONSET_STATUS_COLOR.onTime} style="stroke" strokeWidth={2} />
+            </Canvas>
 
-            {/* Beat grid: quarter/eighth ticks + numbered barlines */}
-            {grid.map((t) => {
-              if (t.type === "eighth") {
-                return (
-                  <View key={`e-${t.time}`} pointerEvents="none">
-                    <View
-                      style={{
-                        position: "absolute",
-                        left: t.time * pxPerMs,
-                        top: TOP_LABEL_LANE,
-                        width: 1,
-                        height: CHART_HEIGHT,
-                        backgroundColor: EIGHTH_TICK_COLOR,
-                      }}
-                    />
-                    <Text
-                      style={{
-                        position: "absolute",
-                        left: t.time * pxPerMs + 2,
-                        top: TOP_LABEL_LANE - 14,
-                        fontSize: 8,
-                        color: "rgba(255,255,255,0.35)",
-                      }}
-                    >
-                      {t.label}
-                    </Text>
-                  </View>
-                );
-              }
-              return (
-                <View key={`q-${t.time}`} pointerEvents="none">
-                  {t.isBarStart && (
-                    <>
-                      <View
-                        style={{
-                          position: "absolute",
-                          left: t.time * pxPerMs,
-                          top: 0,
-                          width: 2,
-                          height: TOP_LABEL_LANE + CHART_HEIGHT,
-                          backgroundColor: BARLINE_COLOR,
-                        }}
-                      />
-                      <Text
-                        style={{
-                          position: "absolute",
-                          left: t.time * pxPerMs + 4,
-                          top: 0,
-                          fontSize: 11,
-                          fontWeight: "700",
-                          color: "#FFFFFF",
-                        }}
-                      >
-                        {t.barNumber}
-                      </Text>
-                    </>
-                  )}
-                  <View
-                    style={{
-                      position: "absolute",
-                      left: t.time * pxPerMs,
-                      top: TOP_LABEL_LANE,
-                      width: 1,
-                      height: CHART_HEIGHT,
-                      backgroundColor: QUARTER_TICK_COLOR,
-                    }}
-                  />
+            {/* Numeric labels only — the lines/waveform themselves are the
+                canvas above; this layer is just RN Text positioned to
+                match each grid tick's x. */}
+            {grid.map((t) => (
+              <View key={`${t.type}-${t.time}`} pointerEvents="none">
+                {t.isBarStart && (
                   <Text
                     style={{
                       position: "absolute",
-                      left: t.time * pxPerMs + 2,
-                      top: TOP_LABEL_LANE - 14,
-                      fontSize: 9,
-                      fontWeight: "600",
-                      color: "rgba(255,255,255,0.55)",
+                      left: t.time * pxPerMs + 4,
+                      top: 0,
+                      fontSize: 11,
+                      fontWeight: "700",
+                      color: "#FFFFFF",
                     }}
                   >
-                    {t.label}
+                    {t.barNumber}
                   </Text>
-                </View>
-              );
-            })}
-
-            {/* One solid vertical line per accepted onset, at its real
-                detected timestamp (not the expected beat) — the only
-                indicator of where the user's hit actually landed. Colored
-                by the same on-time/early/late classification the report
-                already computes, not a separate calculation here. */}
-            {summary.events.map((event) => {
-              const onsetElapsed = event.elapsedMs + event.deltaMs;
-              return (
-                <View
-                  key={`onset-${event.id}`}
-                  pointerEvents="none"
+                )}
+                <Text
                   style={{
                     position: "absolute",
-                    left: onsetElapsed * pxPerMs,
-                    top: TOP_LABEL_LANE,
-                    width: 2,
-                    height: CHART_HEIGHT,
-                    backgroundColor: ONSET_STATUS_COLOR[event.status],
+                    left: t.time * pxPerMs + 2,
+                    top: TOP_LABEL_LANE - 14,
+                    fontSize: t.type === "quarter" ? 9 : 8,
+                    fontWeight: t.type === "quarter" ? "600" : "400",
+                    color:
+                      t.type === "quarter"
+                        ? "rgba(255,255,255,0.55)"
+                        : "rgba(255,255,255,0.35)",
                   }}
-                />
-              );
-            })}
+                >
+                  {t.label}
+                </Text>
+              </View>
+            ))}
           </Animated.View>
         </GestureDetector>
       </ScrollView>

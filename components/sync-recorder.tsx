@@ -18,7 +18,7 @@ import Animated, {
   useSharedValue,
 } from "react-native-reanimated";
 
-export const DEFAULT_TOLERANCE_MS = 120;
+export const DEFAULT_TOLERANCE_MS = 90;
 
 // Polling drives both the peak search and the click-gate resolution.
 const POLL_INTERVAL_MS = 20;
@@ -34,12 +34,6 @@ const SILENCE_FLOOR_DB = -50;
 // flash, waveform accent, report). Exported so the debug chart can draw it
 // as a reference line.
 export const MIN_PEAK_AMPLITUDE = 0.3;
-// Floor for a sample to be worth surfacing at all in the debug chart's
-// rejected-peaks list — well below MIN_PEAK_AMPLITUDE, so genuinely
-// near-silent noise-floor jitter still isn't logged (it would just be
-// visual spam), but a real, audible-but-too-quiet tap still shows up
-// instead of vanishing without a trace.
-const DEBUG_CANDIDATE_FLOOR = 0.15;
 
 export const BEATS_PER_BAR = 4;
 
@@ -307,29 +301,23 @@ const WaveformBar = memo(function WaveformBar({
   );
 });
 
-// How far past a click analyzeSession keeps scanning for where its own
-// decay actually ends (see clickDecayEnds below) before giving up and
-// capping it — a safety bound, not a guess at the real duration, since the
-// real duration is measured directly from the recorded samples.
-const CLICK_DECAY_MAX_MS = 150;
-
-// Post-hoc peak analysis: run once at teardown over the complete raw
-// amplitude log collected during the session (see rawSamplesRef), instead
-// of trying to classify each hit live, in real time, as it happens. With
-// the whole recording already in hand there's no need for a live
-// threshold/gate/rising-edge to guess "was that the user's hit or click
-// residue" — the actual tallest peak near each expected beat position can
-// just be looked up directly, exactly like what the debug chart's waveform
-// bars already show. The live pipeline in the component below still runs
-// in parallel purely to drive the approximate real-time status banner —
-// this function is the sole source of the report's events/rejectedPeaks.
+// Post-hoc analysis: run once at teardown directly over the same decimated
+// waveform already shown as bars in the report (see waveformRef/
+// WAVEFORM_SAMPLE_INTERVAL_MS) — no separate audio analysis, no real-time
+// prediction. For each point of interest (the levare, the chosen
+// triplet/sixteenth note, the beat itself) it just looks at the bars near
+// it and takes the tallest one, exactly like picking out the peak by eye.
+// The live pipeline in the component below still runs in parallel purely
+// to drive the approximate real-time status banner — this function is the
+// sole source of the report's events.
 function analyzeSession(
-  rawSamples: { time: number; amp: number }[],
+  waveform: number[],
   durationMs: number,
   bpm: number,
   subdivision: Subdivision,
   tripletTarget: TripletTarget,
   toleranceMs: number,
+  maxBars: number | undefined,
 ): { events: OnsetEvent[]; rejectedPeaks: RejectedPeak[] } {
   const events: OnsetEvent[] = [];
   const rejectedPeaks: RejectedPeak[] = [];
@@ -338,110 +326,90 @@ function analyzeSession(
   if (
     !Number.isFinite(beatIntervalMs) ||
     beatIntervalMs <= 0 ||
-    rawSamples.length === 0
+    waveform.length === 0
   ) {
     return { events, rejectedPeaks };
   }
 
   const steps = SUBDIVISION_STEPS[subdivision];
   const subIntervalMs = beatIntervalMs / steps;
-  const windowHalf = currentWindowHalfMs(subIntervalMs);
-  const totalQuarters = Math.ceil(durationMs / beatIntervalMs) + 1;
+  const evaluated = evaluatedSubBeats(subdivision, tripletTarget);
+  // How far apart consecutive evaluated positions actually are: every
+  // sub-beat for "sixteenth" (subIntervalMs apart), or the same single
+  // chosen position recurring once per beat for everything else — the
+  // bars searched near one point of interest never reach past halfway to
+  // the neighboring one.
+  const matchRadius =
+    (evaluated.length === steps ? subIntervalMs : beatIntervalMs) / 2;
 
-  // Every click's own decay end, found directly in the data instead of
-  // guessed with a fixed or extending timer: the first sample after each
-  // click where the level has actually dropped back below
-  // MIN_PEAK_AMPLITUDE. Excluding samples inside these spans from the peak
-  // search below is what stops the click's own room/speaker decay from
-  // ever being mistaken for the user's hit, regardless of how long it
-  // happens to ring in a given room.
-  const clickDecayEnds: number[] = [];
-  for (let i = 0; i < totalQuarters; i++) {
-    const clickTime = i * beatIntervalMs;
-    let decayEnd = clickTime + CLICK_DECAY_MAX_MS;
-    for (const sample of rawSamples) {
-      if (sample.time < clickTime) continue;
-      if (sample.time > clickTime + CLICK_DECAY_MAX_MS) break;
-      if (sample.amp < MIN_PEAK_AMPLITUDE) {
-        decayEnd = sample.time;
-        break;
-      }
-    }
-    clickDecayEnds.push(decayEnd);
-  }
-  const isClickResidue = (time: number) => {
-    const nearestBeat = Math.round(time / beatIntervalMs);
-    for (const i of [nearestBeat - 1, nearestBeat, nearestBeat + 1]) {
-      if (i < 0 || i >= clickDecayEnds.length) continue;
-      const clickTime = i * beatIntervalMs;
-      if (time >= clickTime && time <= clickDecayEnds[i]) return true;
-    }
-    return false;
-  };
-
+  // The number of real quarters the metronome actually played. When
+  // maxBars is known (always, in practice — the setup screen requires
+  // picking 1-4 bars) this is exact: maxBars * BEATS_PER_BAR, no more, no
+  // less. Deriving it instead from durationMs (recording continues a
+  // little past the last beat before Stop actually tears everything down,
+  // so durationMs is always a bit longer than beatIntervalMs * realCount)
+  // used to round up to one phantom extra quarter that was never actually
+  // played — if any residual sound (the last real hit's own decay tail,
+  // room noise) fell inside that phantom quarter's search window, it
+  // surfaced as a spurious extra event (e.g. "5 colpi" for 4 real beats).
+  const totalQuarters =
+    maxBars != null
+      ? maxBars * BEATS_PER_BAR
+      : Math.ceil(durationMs / beatIntervalMs) + 1;
   let eventId = 0;
-  let rejectedId = 0;
+  // A bucket already credited to one point of interest can't also be
+  // "the peak" for a neighboring one — without this, two adjacent targets
+  // whose search windows touch at the boundary (e.g. two consecutive
+  // sixteenth notes) can both independently land on the exact same real
+  // peak and each report it as their own hit, drawing two onset lines for
+  // what was actually a single hit.
+  const claimedBuckets = new Set<number>();
 
   for (let i = 0; i < totalQuarters; i++) {
     const beatTime = i * beatIntervalMs;
     const beatIndex = i % BEATS_PER_BAR;
-    for (const sub of evaluatedSubBeats(subdivision, tripletTarget)) {
+    for (const sub of evaluated) {
       const targetTime = beatTime + sub * subIntervalMs;
       if (targetTime > durationMs + beatIntervalMs) continue;
-      const windowStart = targetTime - windowHalf;
-      const windowEnd = targetTime + windowHalf;
+
+      const firstBucket = Math.max(
+        0,
+        Math.floor((targetTime - matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
+      );
+      const lastBucket = Math.min(
+        waveform.length - 1,
+        Math.ceil((targetTime + matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
+      );
 
       let bestAmp = 0;
-      let bestTime: number | null = null;
-      let rawBestAmp = 0;
-      let rawBestTime: number | null = null;
-      for (const sample of rawSamples) {
-        if (sample.time < windowStart || sample.time > windowEnd) continue;
-        if (sample.amp > rawBestAmp) {
-          rawBestAmp = sample.amp;
-          rawBestTime = sample.time;
-        }
-        if (isClickResidue(sample.time)) continue;
-        if (sample.amp > bestAmp) {
-          bestAmp = sample.amp;
-          bestTime = sample.time;
+      let bestBucket = -1;
+      for (let b = firstBucket; b <= lastBucket; b++) {
+        if (claimedBuckets.has(b)) continue;
+        if (waveform[b] > bestAmp) {
+          bestAmp = waveform[b];
+          bestBucket = b;
         }
       }
+      if (bestBucket === -1 || bestAmp < MIN_PEAK_AMPLITUDE) continue;
+      claimedBuckets.add(bestBucket);
 
-      if (bestTime !== null && bestAmp >= MIN_PEAK_AMPLITUDE) {
-        const delta = bestTime - targetTime;
-        const inTime = Math.abs(delta) <= toleranceMs;
-        const status: OnsetStatus = inTime
-          ? "onTime"
-          : delta < 0
-            ? "early"
-            : "late";
-        events.push({
-          id: eventId++,
-          elapsedMs: targetTime,
-          deltaMs: delta,
-          status,
-          beatIndex,
-          subBeatIndex: sub,
-          amplitude: bestAmp,
-        });
-      } else if (rawBestTime !== null && rawBestAmp >= DEBUG_CANDIDATE_FLOOR) {
-        // Nothing outside a click's own decay cleared the threshold — if
-        // the window's true (unfiltered) peak did clear it, log that it
-        // was excluded as click residue instead of silently dropping it;
-        // otherwise it's a genuine near-miss below the acceptance floor.
-        const reason: PeakRejectReason =
-          rawBestAmp >= MIN_PEAK_AMPLITUDE ? "gated" : "belowThreshold";
-        rejectedPeaks.push({
-          id: rejectedId++,
-          elapsedMs: rawBestTime,
-          amplitude: rawBestAmp,
-          reason,
-          beatIndex,
-          subBeatIndex: sub,
-          deltaMs: rawBestTime - targetTime,
-        });
-      }
+      const peakTime = bestBucket * WAVEFORM_SAMPLE_INTERVAL_MS;
+      const delta = peakTime - targetTime;
+      const inTime = Math.abs(delta) <= toleranceMs;
+      const status: OnsetStatus = inTime
+        ? "onTime"
+        : delta < 0
+          ? "early"
+          : "late";
+      events.push({
+        id: eventId++,
+        elapsedMs: targetTime,
+        deltaMs: delta,
+        status,
+        beatIndex,
+        subBeatIndex: sub,
+        amplitude: bestAmp,
+      });
     }
   }
 
@@ -566,14 +534,10 @@ export default function SyncRecorder({
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sessionStartRef = useRef<number | null>(null);
-  // Full-resolution (one entry per poll tick, ~20ms) raw amplitude log for
-  // the tracked session, elapsed-ms-from-sessionStart timestamps — the
-  // source of truth analyzeSession() replays once at teardown to build the
-  // report's events/rejectedPeaks, instead of trying to classify each hit
-  // live as it happens. Separate from waveformRef below, which is a
-  // coarser (50ms bucket-max) decimation kept only for the report's visual
-  // waveform bars — too lossy on timing to drive classification itself.
-  const rawSamplesRef = useRef<{ time: number; amp: number }[]>([]);
+  // Decimated (50ms bucket-max) amplitude history for the whole session —
+  // this is both what the report's waveform bars are drawn from and what
+  // analyzeSession() replays once at teardown to build events, instead of
+  // trying to classify each hit live as it happens.
   const waveformRef = useRef<number[]>([]);
   const waveformBucketIndexRef = useRef(-1);
   const waveformBucketMaxRef = useRef(0);
@@ -813,12 +777,6 @@ export default function SyncRecorder({
     // so array index -> elapsed time stays aligned with OnsetEvent.elapsedMs.
     if (sessionStartRef.current !== null) {
       const elapsed = now - sessionStartRef.current;
-
-      // Logged unconditionally (click-gated or not) — analyzeSession needs
-      // the true complete signal, including the clicks themselves, to find
-      // each one's actual decay end directly in the data.
-      rawSamplesRef.current.push({ time: elapsed, amp: norm });
-
       const bucketIndex = Math.floor(elapsed / WAVEFORM_SAMPLE_INTERVAL_MS);
       if (bucketIndex !== waveformBucketIndexRef.current) {
         if (waveformBucketIndexRef.current >= 0) {
@@ -882,7 +840,6 @@ export default function SyncRecorder({
     recordingStartedRef.current = true;
     recordingStartBeatRef.current = beat;
     sessionStartRef.current = now;
-    rawSamplesRef.current = [];
     waveformRef.current = [];
     waveformBucketIndexRef.current = -1;
     waveformBucketMaxRef.current = 0;
@@ -1037,12 +994,13 @@ export default function SyncRecorder({
 
         const durationMs = Date.now() - sessionStartRef.current;
         const { events, rejectedPeaks } = analyzeSession(
-          rawSamplesRef.current,
+          waveformRef.current,
           durationMs,
           bpmRef.current,
           subdivisionRef.current,
           tripletTargetRef.current,
           toleranceRef.current,
+          maxBarsRef.current,
         );
 
         onSessionEndRef.current?.({
@@ -1056,7 +1014,6 @@ export default function SyncRecorder({
           waveform: waveformRef.current,
         });
         sessionStartRef.current = null;
-        rawSamplesRef.current = [];
         waveformRef.current = [];
       }
     };
