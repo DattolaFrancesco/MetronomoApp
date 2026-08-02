@@ -1,6 +1,5 @@
 import {
   BEATS_PER_BAR,
-  CLICK_GATE_MS,
   WAVEFORM_SAMPLE_INTERVAL_MS,
   type OnsetStatus,
   type SessionSummary,
@@ -33,7 +32,6 @@ const MAX_PX_PER_MS = 1.6;
 const BARLINE_COLOR = "rgba(255,255,255,0.6)";
 const QUARTER_TICK_COLOR = "#FFFFFF";
 const EIGHTH_TICK_COLOR = "rgba(255,255,255,0.14)";
-const GATE_SHADE_COLOR = "rgba(255,69,58,0.22)";
 
 // Onset line color follows the same on-time/early/late classification
 // already computed in sync-recorder.tsx (OnsetEvent.status, against
@@ -120,9 +118,9 @@ export default function DebugChart({ summary }: DebugChartProps) {
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        Griglia beat attesi + finestre di esclusione click. Per ogni colpo
-        accettato, la linea piena verde segna il timestamp reale del picco
-        rilevato dal microfono — la distanza dalla linea del quarto più
+        Griglia beat attesi. Per ogni colpo accettato, una linea verticale
+        (verde se a tempo, rossa altrimenti) segna il timestamp reale del
+        picco rilevato dal microfono — la distanza dalla linea del quarto più
         vicino è lo scarto in anticipo/ritardo. Pizzica per zoomare, scorri in
         orizzontale per navigare.
       </Text>
@@ -136,24 +134,6 @@ export default function DebugChart({ summary }: DebugChartProps) {
       <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: CHART_TOTAL_HEIGHT + 40 }}>
         <GestureDetector gesture={pinchGesture}>
           <Animated.View style={[{ width: contentWidth, height: CHART_TOTAL_HEIGHT + 40 }, previewStyle]}>
-            {/* Click-exclusion shading, one rect per quarter beat */}
-            {grid
-              .filter((t): t is Extract<GridTick, { type: "quarter" }> => t.type === "quarter")
-              .map((t) => (
-                <View
-                  key={`gate-${t.time}`}
-                  pointerEvents="none"
-                  style={{
-                    position: "absolute",
-                    left: t.time * pxPerMs,
-                    top: TOP_LABEL_LANE,
-                    width: Math.max(1, CLICK_GATE_MS * pxPerMs),
-                    height: CHART_HEIGHT,
-                    backgroundColor: GATE_SHADE_COLOR,
-                  }}
-                />
-              ))}
-
             {/* Beat grid: quarter/eighth ticks + numbered barlines */}
             {grid.map((t) => {
               if (t.type === "eighth") {

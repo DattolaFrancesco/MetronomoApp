@@ -18,7 +18,7 @@ import Animated, {
   useSharedValue,
 } from "react-native-reanimated";
 
-export const DEFAULT_TOLERANCE_MS = 130;
+export const DEFAULT_TOLERANCE_MS = 80;
 
 // Polling drives both the peak search and the click-gate resolution.
 const POLL_INTERVAL_MS = 20;
