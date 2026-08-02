@@ -7,15 +7,14 @@ const SQUARE_SIZE = 44;
 
 const BARS_OPTIONS = [1, 2, 3, 4] as const;
 
-// Only "quarter" and "eighth" are actually wired to the real detection
-// engine (see sync-recorder.tsx/beat-indicator.tsx) — "triplet" and
-// "sixteenth" stay visible but disabled until validated on-device, so
-// there's nothing left to build here when we unlock them (just remove
-// `disabled`).
+// Only "sixteenth" is still not wired to the real detection engine (see
+// sync-recorder.tsx/beat-indicator.tsx) — stays visible but disabled until
+// validated on-device, so there's nothing left to build here when we
+// unlock it (just remove `disabled`).
 const TEMPO_OPTIONS: { key: Subdivision; label: string; disabled?: boolean }[] = [
   { key: "quarter", label: "Quarti" },
   { key: "eighth", label: "Ottavi" },
-  { key: "triplet", label: "Terzine", disabled: true },
+  { key: "triplet", label: "Terzine" },
   { key: "sixteenth", label: "Quartine", disabled: true },
 ];
 

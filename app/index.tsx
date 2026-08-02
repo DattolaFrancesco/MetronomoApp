@@ -6,6 +6,7 @@ import SyncRecorder, {
   type OnsetStatus,
   type SessionSummary,
   type Subdivision,
+  type TripletTarget,
 } from "@/components/sync-recorder";
 import { useKeepAwake } from "expo-keep-awake";
 import ExpoPrecisionMetronomeModule, {
@@ -19,7 +20,7 @@ import ExpoPrecisionMetronomeModule, {
   stop,
 } from "expo-precision-metronome";
 import { useEffect, useRef, useState } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const BPM_STEP = 5;
@@ -86,9 +87,10 @@ export default function Home() {
   const [showSetup, setShowSetup] = useState(true);
   const [setupBars, setSetupBars] = useState(1);
   const [setupSubdivision, setSetupSubdivision] = useState<Subdivision>("quarter");
-  // Setup is the very first screen — there's nowhere real to go "back" to,
-  // so its back button is just a joke popup instead of a real navigation.
-  const [showBackPopup, setShowBackPopup] = useState(false);
+  // Which triplet note (2nd or 3rd) to evaluate — only meaningful when
+  // setupSubdivision is "triplet". Chosen on the recording screen itself,
+  // not the setup step (see the picker below, gated to phase === "idle").
+  const [tripletTarget, setTripletTarget] = useState<TripletTarget>(2);
 
   const phaseRef = useRef<Phase>("idle");
   const insets = useSafeAreaInsets();
@@ -226,40 +228,6 @@ export default function Home() {
         className="flex-1 bg-black px-5 justify-center"
         style={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }}
       >
-        <Pressable
-          onPress={() => setShowBackPopup(true)}
-          className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
-          style={{
-            top: insets.top + 12,
-            left: 16,
-            backgroundColor: "rgba(255,255,255,0.08)",
-          }}
-        >
-          <Text className="text-white text-lg">←</Text>
-        </Pressable>
-
-        <Modal
-          visible={showBackPopup}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setShowBackPopup(false)}
-        >
-          <Pressable
-            className="flex-1 items-center justify-center px-10"
-            style={{ backgroundColor: "rgba(0,0,0,0.75)" }}
-            onPress={() => setShowBackPopup(false)}
-          >
-            <View className="bg-neutral-900 rounded-2xl px-8 py-7 border border-white/10">
-              <Text
-                className="text-xl font-bold text-center"
-                style={{ color: "#FF3B30" }}
-              >
-                Dove cazzo vuoi andare?
-              </Text>
-            </View>
-          </Pressable>
-        </Modal>
-
         <SessionSetup
           bars={setupBars}
           onBarsChange={setSetupBars}
@@ -322,7 +290,47 @@ export default function Home() {
             isActive={phase !== "idle"}
             bpm={bpm}
             subdivision={setupSubdivision}
+            tripletTarget={tripletTarget}
           />
+
+          {/* Which triplet note to evaluate — only meaningful for "triplet",
+              and only changeable before Start (the count-in/recording
+              locks it in, same as bars/tempo on the setup screen). The
+              1st note always coincides with the quarter/battere, so it's
+              never a selectable target — only "2"/"3" (see TripletTarget). */}
+          {setupSubdivision === "triplet" && phase === "idle" && (
+            <View className="flex-row items-center justify-center gap-3">
+              <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+                Nota da valutare
+              </Text>
+              <View className="flex-row gap-2">
+                {([2, 3] as const).map((n) => {
+                  const selected = tripletTarget === n;
+                  return (
+                    <Pressable
+                      key={n}
+                      onPress={() => setTripletTarget(n)}
+                      className="w-9 h-9 rounded-lg items-center justify-center active:opacity-70"
+                      style={{
+                        borderWidth: 2,
+                        borderColor: selected ? BPM_COLOR : "rgba(255,255,255,0.25)",
+                        backgroundColor: selected
+                          ? "rgba(57,255,106,0.15)"
+                          : "transparent",
+                      }}
+                    >
+                      <Text
+                        className="text-sm font-bold"
+                        style={{ color: selected ? BPM_COLOR : "#F2F2F7" }}
+                      >
+                        {n}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          )}
         </DarkPanel>
 
         {!isCountIn && (
@@ -352,6 +360,7 @@ export default function Home() {
           countInBeats={COUNT_IN_BEATS}
           bpm={bpm}
           subdivision={setupSubdivision}
+          tripletTarget={tripletTarget}
           maxBars={setupBars}
           onSessionEnd={handleSessionEnd}
           onStatusChange={handleStatusChange}

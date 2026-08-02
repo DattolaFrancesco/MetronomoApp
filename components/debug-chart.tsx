@@ -1,9 +1,8 @@
 import {
   BEATS_PER_BAR,
   CLICK_GATE_MS,
-  MIN_PEAK_AMPLITUDE,
   WAVEFORM_SAMPLE_INTERVAL_MS,
-  type PeakRejectReason,
+  type OnsetStatus,
   type SessionSummary,
 } from "@/components/sync-recorder";
 import { useMemo, useState } from "react";
@@ -15,12 +14,13 @@ import Animated, {
   runOnJS,
 } from "react-native-reanimated";
 
-// Dev/QA-only visualization: dense, unstyled-on-purpose, one marker per
-// signal the detection pipeline actually looks at. Not meant to be pretty —
-// meant to make "why didn't beat 7 register a hit" answerable at a glance.
+// Dev/QA-only visualization: two vertical lines per beat and nothing else —
+// the fixed grid line marks the expected quarter, the solid onset line marks
+// where the mic actually detected the hit. The horizontal gap between them
+// *is* the early/on-time/late signal; no labels needed.
 
 const CHART_HEIGHT = 220;
-const TOP_LABEL_LANE = 34; // reserved strip above the waveform for bar/beat labels
+const TOP_LABEL_LANE = 34; // reserved strip above the chart for bar/beat labels
 const CHART_TOTAL_HEIGHT = CHART_HEIGHT + TOP_LABEL_LANE;
 
 // Horizontal scale, in pixels per millisecond of session time. Zoom changes
@@ -30,27 +30,20 @@ const BASE_PX_PER_MS = 0.35;
 const MIN_PX_PER_MS = 0.06;
 const MAX_PX_PER_MS = 1.6;
 
-const WAVEFORM_COLOR = "rgba(57,255,106,0.55)";
-const THRESHOLD_LINE_COLOR = "#FFD60A";
 const BARLINE_COLOR = "rgba(255,255,255,0.6)";
-const QUARTER_TICK_COLOR = "rgba(255,255,255,0.3)";
+const QUARTER_TICK_COLOR = "#FFFFFF";
 const EIGHTH_TICK_COLOR = "rgba(255,255,255,0.14)";
 const GATE_SHADE_COLOR = "rgba(255,69,58,0.22)";
-const ACCEPTED_COLOR = "#39FF6A";
 
-const REJECTED_META: Record<
-  PeakRejectReason,
-  { color: string; label: string }
-> = {
-  belowThreshold: { color: "#8E8E93", label: "sotto soglia" },
-  gated: { color: "#FF453A", label: "gating" },
-  clickMatch: { color: "#BF5AF2", label: "click rilevato" },
+// Onset line color follows the same on-time/early/late classification
+// already computed in sync-recorder.tsx (OnsetEvent.status, against
+// toleranceMs) — early and late are both just "not on time" here, one red,
+// no need to tell them apart by color in this view.
+const ONSET_STATUS_COLOR: Record<OnsetStatus, string> = {
+  onTime: "#39FF6A",
+  early: "#FF453A",
+  late: "#FF453A",
 };
-
-function formatSigned(value: number) {
-  const rounded = Math.round(value);
-  return `${rounded > 0 ? "+" : ""}${rounded}ms`;
-}
 
 type GridTick =
   | { type: "quarter"; time: number; isBarStart: boolean; barNumber: number; label: string }
@@ -124,22 +117,20 @@ export default function DebugChart({ summary }: DebugChartProps) {
     return ticks;
   }, [summary.bpm, totalMs]);
 
-  const thresholdY = CHART_HEIGHT * (1 - MIN_PEAK_AMPLITUDE);
-
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        Waveform grezza (bucket da {WAVEFORM_SAMPLE_INTERVAL_MS}ms) + griglia
-        beat attesi + finestre di esclusione click + esito di ogni picco
-        rilevato. Pizzica per zoomare, scorri in orizzontale per navigare.
+        Griglia beat attesi + finestre di esclusione click. Per ogni colpo
+        accettato, la linea piena verde segna il timestamp reale del picco
+        rilevato dal microfono — la distanza dalla linea del quarto più
+        vicino è lo scarto in anticipo/ritardo. Pizzica per zoomare, scorri in
+        orizzontale per navigare.
       </Text>
 
       <View className="flex-row flex-wrap gap-x-3 gap-y-1">
-        <LegendDot color={ACCEPTED_COLOR} label="colpo accettato" />
-        <LegendDot color={REJECTED_META.belowThreshold.color} label="sotto soglia" />
-        <LegendDot color={REJECTED_META.gated.color} label="dentro gating" />
-        <LegendDot color={REJECTED_META.clickMatch.color} label="click rilevato" />
-        <LegendDot color={THRESHOLD_LINE_COLOR} label="soglia minima" />
+        <LegendLine color={QUARTER_TICK_COLOR} label="beat atteso" />
+        <LegendLine color={ONSET_STATUS_COLOR.onTime} label="colpo a tempo" />
+        <LegendLine color={ONSET_STATUS_COLOR.early} label="colpo non a tempo" />
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: CHART_TOTAL_HEIGHT + 40 }}>
@@ -162,39 +153,6 @@ export default function DebugChart({ summary }: DebugChartProps) {
                   }}
                 />
               ))}
-
-            {/* Threshold reference line */}
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                top: TOP_LABEL_LANE + thresholdY,
-                height: 1,
-                backgroundColor: THRESHOLD_LINE_COLOR,
-                opacity: 0.6,
-              }}
-            />
-
-            {/* Raw waveform bars */}
-            {summary.waveform.map((value, index) => {
-              const barW = Math.max(1, WAVEFORM_SAMPLE_INTERVAL_MS * pxPerMs - 0.5);
-              return (
-                <View
-                  key={`wf-${index}`}
-                  pointerEvents="none"
-                  style={{
-                    position: "absolute",
-                    left: index * WAVEFORM_SAMPLE_INTERVAL_MS * pxPerMs,
-                    top: TOP_LABEL_LANE + CHART_HEIGHT - value * CHART_HEIGHT,
-                    width: barW,
-                    height: Math.max(1, value * CHART_HEIGHT),
-                    backgroundColor: WAVEFORM_COLOR,
-                  }}
-                />
-              );
-            })}
 
             {/* Beat grid: quarter/eighth ticks + numbered barlines */}
             {grid.map((t) => {
@@ -279,68 +237,26 @@ export default function DebugChart({ summary }: DebugChartProps) {
               );
             })}
 
-            {/* Accepted onsets */}
+            {/* One solid vertical line per accepted onset, at its real
+                detected timestamp (not the expected beat) — the only
+                indicator of where the user's hit actually landed. Colored
+                by the same on-time/early/late classification the report
+                already computes, not a separate calculation here. */}
             {summary.events.map((event) => {
               const onsetElapsed = event.elapsedMs + event.deltaMs;
-              const y = TOP_LABEL_LANE + CHART_HEIGHT - event.amplitude * CHART_HEIGHT;
               return (
                 <View
-                  key={`acc-${event.id}`}
+                  key={`onset-${event.id}`}
                   pointerEvents="none"
-                  style={{ position: "absolute", left: onsetElapsed * pxPerMs - 4, top: y - 4 }}
-                >
-                  <View
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      backgroundColor: ACCEPTED_COLOR,
-                    }}
-                  />
-                  <Text
-                    style={{
-                      fontSize: 8,
-                      color: ACCEPTED_COLOR,
-                      marginTop: 1,
-                      width: 70,
-                    }}
-                  >
-                    {Math.round(event.amplitude * 100)}% {formatSigned(event.deltaMs)}
-                  </Text>
-                </View>
-              );
-            })}
-
-            {/* Rejected peaks, colored + labeled by reason */}
-            {summary.rejectedPeaks.map((peak) => {
-              const meta = REJECTED_META[peak.reason];
-              const y = TOP_LABEL_LANE + CHART_HEIGHT - peak.amplitude * CHART_HEIGHT;
-              return (
-                <View
-                  key={`rej-${peak.id}`}
-                  pointerEvents="none"
-                  style={{ position: "absolute", left: peak.elapsedMs * pxPerMs - 4, top: y - 4 }}
-                >
-                  <View
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      backgroundColor: meta.color,
-                      opacity: 0.9,
-                    }}
-                  />
-                  <Text
-                    style={{
-                      fontSize: 8,
-                      color: meta.color,
-                      marginTop: 1,
-                      width: 80,
-                    }}
-                  >
-                    {meta.label} · {Math.round(peak.amplitude * 100)}%
-                  </Text>
-                </View>
+                  style={{
+                    position: "absolute",
+                    left: onsetElapsed * pxPerMs,
+                    top: TOP_LABEL_LANE,
+                    width: 2,
+                    height: CHART_HEIGHT,
+                    backgroundColor: ONSET_STATUS_COLOR[event.status],
+                  }}
+                />
               );
             })}
           </Animated.View>
@@ -350,10 +266,10 @@ export default function DebugChart({ summary }: DebugChartProps) {
   );
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+function LegendLine({ color, label }: { color: string; label: string }) {
   return (
     <View className="flex-row items-center gap-1">
-      <View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: color }} />
+      <View style={{ width: 10, height: 2, backgroundColor: color }} />
       <Text className="text-neutral-500 text-[9px]">{label}</Text>
     </View>
   );

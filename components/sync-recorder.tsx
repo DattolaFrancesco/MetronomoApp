@@ -18,7 +18,7 @@ import Animated, {
   useSharedValue,
 } from "react-native-reanimated";
 
-export const DEFAULT_TOLERANCE_MS = 50;
+export const DEFAULT_TOLERANCE_MS = 130;
 
 // Polling drives both the peak search and the click-gate resolution.
 const POLL_INTERVAL_MS = 20;
@@ -60,34 +60,62 @@ export const SUBDIVISION_STEPS: Record<Subdivision, number> = {
   sixteenth: 4,
 };
 
+// Which of the triplet's two off-beat notes (the 2nd or 3rd note of the
+// triplet — the 1st always coincides with the quarter/battere, so it's
+// never a selectable target) is evaluated when subdivision is "triplet".
+// Irrelevant for every other subdivision. 1-indexed as shown to the user
+// ("2" / "3"); internally that's sub-beat index 1 or 2 (0 = the quarter).
+export type TripletTarget = 2 | 3;
+
 // Which sub-beat indices within each quarter actually get an onset-capture
-// window opened. For every subdivision except "eighth" this is simply every
-// step (0..steps-1). "eighth" is a deliberate exception: only the off-beat
-// (the eighth note halfway between quarters, sub-beat 1 — "il levare") is
-// evaluated; the quarter itself (sub-beat 0, "il battere") is skipped
-// entirely, so it never becomes an accepted/rejected onset anywhere
-// (report, debug chart). See beat-indicator.tsx for the purely-visual
-// distinction this implies (both points are still shown there, just
-// differently styled).
-export const EVALUATED_SUB_BEATS: Record<Subdivision, number[]> = {
-  quarter: [0],
-  eighth: [1],
-  triplet: [0, 1, 2],
-  sixteenth: [0, 1, 2, 3],
-};
+// window opened. For "quarter" and "sixteenth" this is simply every step
+// (0..steps-1). "eighth" and "triplet" are deliberate exceptions: only a
+// single chosen off-beat is evaluated — the quarter itself (sub-beat 0,
+// "il battere") is skipped entirely, so it never becomes an
+// accepted/rejected onset anywhere (report, debug chart). For "eighth" that
+// off-beat is fixed (there's only one, "il levare", sub-beat 1); for
+// "triplet" it's whichever of the two off-beat notes the user picked on the
+// recording screen (see TripletTarget). See beat-indicator.tsx for the
+// purely-visual distinction this implies (all sub-beats are still shown
+// there, just differently styled).
+export function evaluatedSubBeats(
+  subdivision: Subdivision,
+  tripletTarget: TripletTarget,
+): number[] {
+  switch (subdivision) {
+    case "quarter":
+      return [0];
+    case "eighth":
+      return [1];
+    case "triplet":
+      return [tripletTarget - 1];
+    case "sixteenth":
+      return [0, 1, 2, 3];
+  }
+}
 
 // Which sub-beat is the "primary" (prominent, glowing) marker in
-// beat-indicator.tsx. For every subdivision except "eighth" this is the
-// native quarter itself. "eighth" is the exception, matching
-// EVALUATED_SUB_BEATS above: since only the off-beat is actually judged by
-// peak detection, it's the off-beat that's drawn prominent — the quarter
-// is still shown, just demoted to the secondary/outline style.
-export const PRIMARY_SUB_BEAT: Record<Subdivision, number> = {
-  quarter: 0,
-  eighth: 1,
-  triplet: 0,
-  sixteenth: 0,
-};
+// beat-indicator.tsx. For "quarter" and "sixteenth" this is the native
+// quarter itself. "eighth" and "triplet" are exceptions, matching
+// evaluatedSubBeats above: since only the chosen off-beat is actually
+// judged by peak detection, it's that off-beat that's drawn prominent — the
+// quarter (and, for triplets, the other off-beat note) stay visible, just
+// demoted to the secondary/outline style.
+export function primarySubBeat(
+  subdivision: Subdivision,
+  tripletTarget: TripletTarget,
+): number {
+  switch (subdivision) {
+    case "quarter":
+      return 0;
+    case "eighth":
+      return 1;
+    case "triplet":
+      return tripletTarget - 1;
+    case "sixteenth":
+      return 0;
+  }
+}
 
 // The peak-capture window around each beat adapts to tempo (40% of the
 // beat-to-beat interval each side), clamped to a sane range for very
@@ -167,10 +195,12 @@ export type SessionSummary = {
   // the expected quarter/eighth beat grid against the raw waveform.
   bpm: number;
   // Rhythmic subdivision the session was recorded at (see Subdivision) —
-  // determines how many onset-capture windows exist per quarter beat. Not
-  // yet reflected in the report's own grid/barline drawing (session-report.tsx
-  // still assumes plain quarters) — a known follow-up, not fixed here.
+  // determines how many onset-capture windows exist per quarter beat.
   subdivision: Subdivision;
+  // Which triplet note was the evaluation target (see TripletTarget) —
+  // meaningless when subdivision isn't "triplet", but always present so
+  // consumers don't need to special-case its absence.
+  tripletTarget: TripletTarget;
   // Decimated amplitude history for the whole session, one entry per
   // WAVEFORM_SAMPLE_INTERVAL_MS bucket, for drawing the static full-session
   // waveform in the report. Index i covers [i, i+1) * WAVEFORM_SAMPLE_INTERVAL_MS
@@ -268,6 +298,10 @@ type SyncRecorderProps = {
   // Rhythmic subdivision chosen on the setup screen — defaults to plain
   // quarters (one capture window per native beat, the original behavior).
   subdivision?: Subdivision;
+  // Which triplet note (2nd or 3rd) to evaluate when subdivision is
+  // "triplet" — chosen on the recording screen, not the setup step. Ignored
+  // for every other subdivision.
+  tripletTarget?: TripletTarget;
   // Fixed number of bars to auto-stop after (chosen on the setup screen).
   // Undefined means no auto-stop — the caller must stop manually. This is a
   // behavior change from the previous unlimited-until-Stop session: when
@@ -299,6 +333,7 @@ export default function SyncRecorder({
   bpm,
   toleranceMs = DEFAULT_TOLERANCE_MS,
   subdivision = "quarter",
+  tripletTarget = 2,
   maxBars,
   onSessionEnd,
   onStatusChange,
@@ -322,6 +357,7 @@ export default function SyncRecorder({
   const toleranceRef = useRef(toleranceMs);
   const bpmRef = useRef(bpm);
   const subdivisionRef = useRef(subdivision);
+  const tripletTargetRef = useRef(tripletTarget);
   const maxBarsRef = useRef(maxBars);
   const onLimitReachedRef = useRef(onLimitReached);
   // Native beat number (since the engine's own start()) of the beat that
@@ -385,6 +421,10 @@ export default function SyncRecorder({
   useEffect(() => {
     subdivisionRef.current = subdivision;
   }, [subdivision]);
+
+  useEffect(() => {
+    tripletTargetRef.current = tripletTarget;
+  }, [tripletTarget]);
 
   useEffect(() => {
     maxBarsRef.current = maxBars;
@@ -696,7 +736,8 @@ export default function SyncRecorder({
           recordingStartedRef.current &&
           maxBarsRef.current != null &&
           recordingStartBeatRef.current !== null &&
-          beat - recordingStartBeatRef.current >= maxBarsRef.current * BEATS_PER_BAR
+          beat - recordingStartBeatRef.current >=
+            maxBarsRef.current * BEATS_PER_BAR
         ) {
           onLimitReachedRef.current?.();
           return;
@@ -709,11 +750,14 @@ export default function SyncRecorder({
         const windowHalf = currentWindowHalfMs(subIntervalMs);
 
         // One window per *evaluated* sub-beat — just the native beat itself
-        // for plain quarters, all `steps` positions for triplets/sixteenths,
-        // but only the off-beat for eighths (see EVALUATED_SUB_BEATS): the
-        // quarter itself intentionally never gets a window there, so it can
-        // never become an accepted/rejected onset.
-        for (const sub of EVALUATED_SUB_BEATS[subdivisionRef.current]) {
+        // for plain quarters, all `steps` positions for sixteenths, but only
+        // the chosen off-beat for eighths/triplets (see evaluatedSubBeats):
+        // every non-evaluated sub-beat intentionally never gets a window,
+        // so it can never become an accepted/rejected onset.
+        for (const sub of evaluatedSubBeats(
+          subdivisionRef.current,
+          tripletTargetRef.current,
+        )) {
           openBeatWindow(now + sub * subIntervalMs, beatIndex, sub, windowHalf);
         }
 
@@ -817,6 +861,7 @@ export default function SyncRecorder({
           toleranceMs: toleranceRef.current,
           bpm: bpmRef.current,
           subdivision: subdivisionRef.current,
+          tripletTarget: tripletTargetRef.current,
           waveform: waveformRef.current,
         });
         sessionStartRef.current = null;

@@ -1,7 +1,8 @@
 import {
-  PRIMARY_SUB_BEAT,
+  primarySubBeat,
   SUBDIVISION_STEPS,
   type Subdivision,
+  type TripletTarget,
 } from "@/components/sync-recorder";
 import ExpoPrecisionMetronomeModule, {
   type BeatEventPayload,
@@ -74,15 +75,17 @@ type BeatIndicatorProps = {
   isActive: boolean;
   bpm: number;
   subdivision?: Subdivision;
+  tripletTarget?: TripletTarget;
 };
 
 export default function BeatIndicator({
   isActive,
   bpm,
   subdivision = "quarter",
+  tripletTarget = 2,
 }: BeatIndicatorProps) {
   const steps = SUBDIVISION_STEPS[subdivision];
-  const primarySub = PRIMARY_SUB_BEAT[subdivision];
+  const primarySub = primarySubBeat(subdivision, tripletTarget);
 
   // currentPoint spans 0..BEATS_PER_BAR*steps-1: sub-beat 0 of each quarter
   // is native truth (from onBeat), sub-beats 1..steps-1 have no native
