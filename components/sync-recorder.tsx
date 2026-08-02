@@ -43,6 +43,52 @@ const DEBUG_CANDIDATE_FLOOR = 0.15;
 
 export const BEATS_PER_BAR = 4;
 
+// Rhythmic subdivision selected on the setup screen — how many equal
+// sub-beats each native quarter-note beat is split into for onset-capture
+// purposes. The native engine only ever fires onBeat once per quarter, so
+// every subdivision beyond "quarter" is purely a JS-side windowing scheme:
+// each onBeat opens `steps` evenly-spaced capture windows across that one
+// quarter's interval instead of just one. Only "quarter" and "eighth" are
+// wired up and selectable in the setup screen for now — "triplet" and
+// "sixteenth" are defined here already since the mechanism is identical for
+// any step count, but stay disabled in the UI until validated on-device.
+export type Subdivision = "quarter" | "eighth" | "triplet" | "sixteenth";
+export const SUBDIVISION_STEPS: Record<Subdivision, number> = {
+  quarter: 1,
+  eighth: 2,
+  triplet: 3,
+  sixteenth: 4,
+};
+
+// Which sub-beat indices within each quarter actually get an onset-capture
+// window opened. For every subdivision except "eighth" this is simply every
+// step (0..steps-1). "eighth" is a deliberate exception: only the off-beat
+// (the eighth note halfway between quarters, sub-beat 1 — "il levare") is
+// evaluated; the quarter itself (sub-beat 0, "il battere") is skipped
+// entirely, so it never becomes an accepted/rejected onset anywhere
+// (report, debug chart). See beat-indicator.tsx for the purely-visual
+// distinction this implies (both points are still shown there, just
+// differently styled).
+export const EVALUATED_SUB_BEATS: Record<Subdivision, number[]> = {
+  quarter: [0],
+  eighth: [1],
+  triplet: [0, 1, 2],
+  sixteenth: [0, 1, 2, 3],
+};
+
+// Which sub-beat is the "primary" (prominent, glowing) marker in
+// beat-indicator.tsx. For every subdivision except "eighth" this is the
+// native quarter itself. "eighth" is the exception, matching
+// EVALUATED_SUB_BEATS above: since only the off-beat is actually judged by
+// peak detection, it's the off-beat that's drawn prominent — the quarter
+// is still shown, just demoted to the secondary/outline style.
+export const PRIMARY_SUB_BEAT: Record<Subdivision, number> = {
+  quarter: 0,
+  eighth: 1,
+  triplet: 0,
+  sixteenth: 0,
+};
+
 // The peak-capture window around each beat adapts to tempo (40% of the
 // beat-to-beat interval each side), clamped to a sane range for very
 // slow/fast tempos.
@@ -81,6 +127,10 @@ export type OnsetEvent = {
   deltaMs: number;
   status: OnsetStatus;
   beatIndex: number;
+  // Which sub-beat within that quarter this is (0 for the quarter itself,
+  // 1..steps-1 for the subdivisions in between) — 0 always when
+  // subdivision is "quarter". See Subdivision/SUBDIVISION_STEPS.
+  subBeatIndex: number;
   // Normalized (0-1) amplitude of the accepted onset sample — debug-chart
   // only (not shown in the main user-facing report).
   amplitude: number;
@@ -100,6 +150,7 @@ export type RejectedPeak = {
   amplitude: number;
   reason: PeakRejectReason;
   beatIndex: number;
+  subBeatIndex: number;
   // Signed offset from the beat this peak's window belonged to (negative =
   // before the beat, positive = after) — same convention as OnsetEvent.deltaMs.
   deltaMs: number;
@@ -115,6 +166,11 @@ export type SessionSummary = {
   // BPM the session was recorded at — debug-chart only, needed to redraw
   // the expected quarter/eighth beat grid against the raw waveform.
   bpm: number;
+  // Rhythmic subdivision the session was recorded at (see Subdivision) —
+  // determines how many onset-capture windows exist per quarter beat. Not
+  // yet reflected in the report's own grid/barline drawing (session-report.tsx
+  // still assumes plain quarters) — a known follow-up, not fixed here.
+  subdivision: Subdivision;
   // Decimated amplitude history for the whole session, one entry per
   // WAVEFORM_SAMPLE_INTERVAL_MS bucket, for drawing the static full-session
   // waveform in the report. Index i covers [i, i+1) * WAVEFORM_SAMPLE_INTERVAL_MS
@@ -124,6 +180,7 @@ export type SessionSummary = {
 
 type PendingBeat = {
   beatIndex: number;
+  subBeatIndex: number;
   beatTime: number;
   windowStart: number;
   windowEnd: number;
@@ -208,6 +265,9 @@ type SyncRecorderProps = {
   countInBeats?: number;
   bpm: number;
   toleranceMs?: number;
+  // Rhythmic subdivision chosen on the setup screen — defaults to plain
+  // quarters (one capture window per native beat, the original behavior).
+  subdivision?: Subdivision;
   // Fixed number of bars to auto-stop after (chosen on the setup screen).
   // Undefined means no auto-stop — the caller must stop manually. This is a
   // behavior change from the previous unlimited-until-Stop session: when
@@ -238,6 +298,7 @@ export default function SyncRecorder({
   countInBeats = 0,
   bpm,
   toleranceMs = DEFAULT_TOLERANCE_MS,
+  subdivision = "quarter",
   maxBars,
   onSessionEnd,
   onStatusChange,
@@ -260,6 +321,7 @@ export default function SyncRecorder({
 
   const toleranceRef = useRef(toleranceMs);
   const bpmRef = useRef(bpm);
+  const subdivisionRef = useRef(subdivision);
   const maxBarsRef = useRef(maxBars);
   const onLimitReachedRef = useRef(onLimitReached);
   // Native beat number (since the engine's own start()) of the beat that
@@ -321,6 +383,10 @@ export default function SyncRecorder({
   }, [bpm]);
 
   useEffect(() => {
+    subdivisionRef.current = subdivision;
+  }, [subdivision]);
+
+  useEffect(() => {
     maxBarsRef.current = maxBars;
   }, [maxBars]);
 
@@ -372,6 +438,7 @@ export default function SyncRecorder({
   function openBeatWindow(
     beatTime: number,
     beatIndex: number,
+    subBeatIndex: number,
     windowHalf: number,
   ) {
     const windowStart = beatTime - windowHalf;
@@ -401,6 +468,7 @@ export default function SyncRecorder({
       ...pendingBeatsRef.current,
       {
         beatIndex,
+        subBeatIndex,
         beatTime,
         windowStart,
         windowEnd,
@@ -450,6 +518,7 @@ export default function SyncRecorder({
             deltaMs: delta,
             status,
             beatIndex: point.beatIndex,
+            subBeatIndex: point.subBeatIndex,
             amplitude: point.onsetAmp ?? 0,
           });
         }
@@ -471,6 +540,7 @@ export default function SyncRecorder({
             amplitude: point.peakAmp,
             reason,
             beatIndex: point.beatIndex,
+            subBeatIndex: point.subBeatIndex,
             deltaMs: point.peakTime - point.beatTime,
           });
         }
@@ -633,9 +703,19 @@ export default function SyncRecorder({
         }
 
         const beatIndex = beat % BEATS_PER_BAR;
-        const windowHalf = currentWindowHalfMs(currentBeatIntervalMs());
+        const beatIntervalMs = currentBeatIntervalMs();
+        const steps = SUBDIVISION_STEPS[subdivisionRef.current];
+        const subIntervalMs = beatIntervalMs / steps;
+        const windowHalf = currentWindowHalfMs(subIntervalMs);
 
-        openBeatWindow(now, beatIndex, windowHalf);
+        // One window per *evaluated* sub-beat — just the native beat itself
+        // for plain quarters, all `steps` positions for triplets/sixteenths,
+        // but only the off-beat for eighths (see EVALUATED_SUB_BEATS): the
+        // quarter itself intentionally never gets a window there, so it can
+        // never become an accepted/rejected onset.
+        for (const sub of EVALUATED_SUB_BEATS[subdivisionRef.current]) {
+          openBeatWindow(now + sub * subIntervalMs, beatIndex, sub, windowHalf);
+        }
 
         gatedUntilRef.current = now + CLICK_GATE_MS;
 
@@ -736,6 +816,7 @@ export default function SyncRecorder({
           durationMs: Date.now() - sessionStartRef.current,
           toleranceMs: toleranceRef.current,
           bpm: bpmRef.current,
+          subdivision: subdivisionRef.current,
           waveform: waveformRef.current,
         });
         sessionStartRef.current = null;

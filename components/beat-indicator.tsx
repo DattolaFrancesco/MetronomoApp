@@ -1,3 +1,8 @@
+import {
+  PRIMARY_SUB_BEAT,
+  SUBDIVISION_STEPS,
+  type Subdivision,
+} from "@/components/sync-recorder";
 import ExpoPrecisionMetronomeModule, {
   type BeatEventPayload,
 } from "expo-precision-metronome";
@@ -16,16 +21,19 @@ const ACTIVE_COLOR = "#39FF6A";
 const ACTIVE_TRANSPARENT = "rgba(57,255,106,0)";
 const INACTIVE_BORDER = "#3A3A3C";
 
-type PointVariant = "quarter" | "eighth";
-
 type BeatDotProps = {
   active: boolean;
-  variant: PointVariant;
+  // The "primary" sub-beat (see PRIMARY_SUB_BEAT in sync-recorder.tsx) is
+  // drawn bigger/brighter; every other sub-beat is drawn smaller/dimmer.
+  // Normally that's the native quarter beat itself — but for "eighth"
+  // specifically, only the off-beat is actually judged by peak detection,
+  // so it's the off-beat that gets the prominent style here instead, even
+  // though the quarter is still shown (demoted to secondary).
+  isPrimary: boolean;
 };
 
-function BeatDot({ active, variant }: BeatDotProps) {
+function BeatDot({ active, isPrimary }: BeatDotProps) {
   const glow = useSharedValue(0);
-  const isQuarter = variant === "quarter";
 
   useEffect(() => {
     glow.value = withTiming(active ? 1 : 0, { duration: active ? 140 : 220 });
@@ -38,23 +46,23 @@ function BeatDot({ active, variant }: BeatDotProps) {
       [ACTIVE_TRANSPARENT, ACTIVE_COLOR],
     ),
     borderColor: interpolateColor(glow.value, [0, 1], [INACTIVE_BORDER, ACTIVE_COLOR]),
-    shadowOpacity: glow.value * (isQuarter ? 0.9 : 0.45),
-    transform: [{ scale: 1 + glow.value * (isQuarter ? 0.15 : 0.25) }],
+    shadowOpacity: glow.value * (isPrimary ? 0.9 : 0.45),
+    transform: [{ scale: 1 + glow.value * (isPrimary ? 0.15 : 0.25) }],
   }));
 
   return (
     <Animated.View
       className={
-        isQuarter
+        isPrimary
           ? "w-4 h-4 rounded-full border-[1.5px]"
           : "w-2 h-2 rounded-full border"
       }
       style={[
         {
           shadowColor: ACTIVE_COLOR,
-          shadowRadius: isQuarter ? 8 : 4,
+          shadowRadius: isPrimary ? 8 : 4,
           shadowOffset: { width: 0, height: 0 },
-          opacity: isQuarter ? 1 : 0.85,
+          opacity: isPrimary ? 1 : 0.85,
         },
         style,
       ]}
@@ -65,20 +73,33 @@ function BeatDot({ active, variant }: BeatDotProps) {
 type BeatIndicatorProps = {
   isActive: boolean;
   bpm: number;
+  subdivision?: Subdivision;
 };
 
-export default function BeatIndicator({ isActive, bpm }: BeatIndicatorProps) {
-  // currentPoint spans 0-7: even indices are quarters (native truth from
-  // onBeat), odd indices are the eighths in between ("e" of "1 e 2 e 3 e 4 e"),
-  // which have no native event and are predicted from the BPM instead.
+export default function BeatIndicator({
+  isActive,
+  bpm,
+  subdivision = "quarter",
+}: BeatIndicatorProps) {
+  const steps = SUBDIVISION_STEPS[subdivision];
+  const primarySub = PRIMARY_SUB_BEAT[subdivision];
+
+  // currentPoint spans 0..BEATS_PER_BAR*steps-1: sub-beat 0 of each quarter
+  // is native truth (from onBeat), sub-beats 1..steps-1 have no native
+  // event and are predicted from the BPM instead.
   const [currentPoint, setCurrentPoint] = useState<number | null>(null);
   const fallbackIndexRef = useRef(0);
   const bpmRef = useRef(bpm);
-  const eighthTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stepsRef = useRef(steps);
+  const subTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
     bpmRef.current = bpm;
   }, [bpm]);
+
+  useEffect(() => {
+    stepsRef.current = steps;
+  }, [steps]);
 
   useEffect(() => {
     const subscription = ExpoPrecisionMetronomeModule.addListener(
@@ -88,29 +109,34 @@ export default function BeatIndicator({ isActive, bpm }: BeatIndicatorProps) {
           typeof beat === "number" ? beat % BEATS_PER_BAR : fallbackIndexRef.current;
         fallbackIndexRef.current = (quarterIndex + 1) % BEATS_PER_BAR;
 
-        if (eighthTimeoutRef.current) clearTimeout(eighthTimeoutRef.current);
+        for (const t of subTimeoutsRef.current) clearTimeout(t);
+        subTimeoutsRef.current = [];
 
-        setCurrentPoint(quarterIndex * 2);
+        const stepCount = stepsRef.current;
+        const base = quarterIndex * stepCount;
+        setCurrentPoint(base);
 
-        const halfIntervalMs = 30000 / bpmRef.current;
-        eighthTimeoutRef.current = setTimeout(() => {
-          setCurrentPoint(quarterIndex * 2 + 1);
-        }, halfIntervalMs);
+        const subIntervalMs = 60000 / bpmRef.current / stepCount;
+        for (let sub = 1; sub < stepCount; sub++) {
+          subTimeoutsRef.current.push(
+            setTimeout(() => {
+              setCurrentPoint(base + sub);
+            }, sub * subIntervalMs),
+          );
+        }
       },
     );
     return () => {
       subscription.remove();
-      if (eighthTimeoutRef.current) clearTimeout(eighthTimeoutRef.current);
+      for (const t of subTimeoutsRef.current) clearTimeout(t);
     };
   }, []);
 
   useEffect(() => {
     if (!isActive) {
       fallbackIndexRef.current = 0;
-      if (eighthTimeoutRef.current) {
-        clearTimeout(eighthTimeoutRef.current);
-        eighthTimeoutRef.current = null;
-      }
+      for (const t of subTimeoutsRef.current) clearTimeout(t);
+      subTimeoutsRef.current = [];
     }
   }, [isActive]);
 
@@ -120,8 +146,13 @@ export default function BeatIndicator({ isActive, bpm }: BeatIndicatorProps) {
     <View className="flex-row items-center justify-center gap-4">
       {Array.from({ length: BEATS_PER_BAR }).map((_, groupIndex) => (
         <View key={groupIndex} className="flex-row items-center gap-1.5">
-          <BeatDot variant="quarter" active={groupIndex * 2 === displayedPoint} />
-          <BeatDot variant="eighth" active={groupIndex * 2 + 1 === displayedPoint} />
+          {Array.from({ length: steps }).map((_, sub) => (
+            <BeatDot
+              key={sub}
+              isPrimary={sub === primarySub}
+              active={groupIndex * steps + sub === displayedPoint}
+            />
+          ))}
         </View>
       ))}
     </View>

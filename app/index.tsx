@@ -1,10 +1,11 @@
 import BeatIndicator from "@/components/beat-indicator";
 import DarkPanel from "@/components/dark-panel";
 import SessionReport from "@/components/session-report";
-import SessionSetup, { type SetupSubdivision } from "@/components/session-setup";
+import SessionSetup from "@/components/session-setup";
 import SyncRecorder, {
   type OnsetStatus,
   type SessionSummary,
+  type Subdivision,
 } from "@/components/sync-recorder";
 import { useKeepAwake } from "expo-keep-awake";
 import ExpoPrecisionMetronomeModule, {
@@ -18,12 +19,19 @@ import ExpoPrecisionMetronomeModule, {
   stop,
 } from "expo-precision-metronome";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Modal, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const BPM_STEP = 5;
 const BPM_COLOR = "#39FF6A";
 const COUNT_IN_BEATS = 4;
+
+const SUBDIVISION_LABELS: Record<Subdivision, string> = {
+  quarter: "Quarti",
+  eighth: "Quarti · Ottavi",
+  triplet: "Quarti · Terzine",
+  sixteenth: "Quarti · Sedicesimi",
+};
 
 type Phase = "idle" | "countIn" | "recording";
 
@@ -77,7 +85,10 @@ export default function Home() {
   // components/session-setup.tsx).
   const [showSetup, setShowSetup] = useState(true);
   const [setupBars, setSetupBars] = useState(1);
-  const [setupSubdivision, setSetupSubdivision] = useState<SetupSubdivision>("quarter");
+  const [setupSubdivision, setSetupSubdivision] = useState<Subdivision>("quarter");
+  // Setup is the very first screen — there's nowhere real to go "back" to,
+  // so its back button is just a joke popup instead of a real navigation.
+  const [showBackPopup, setShowBackPopup] = useState(false);
 
   const phaseRef = useRef<Phase>("idle");
   const insets = useSafeAreaInsets();
@@ -133,10 +144,22 @@ export default function Home() {
   };
 
   // Leaves the setup step and reveals the metronome screen underneath —
-  // setupBars is now wired to the real session (passed to SyncRecorder as
-  // maxBars below); setupSubdivision is still UI-only, not connected yet.
+  // setupBars and setupSubdivision are both wired to the real session now
+  // (passed to SyncRecorder/BeatIndicator below).
   const handleSetupStart = () => {
     setShowSetup(false);
+  };
+
+  // Back button on the recording screen itself — stops whatever's running
+  // first (same as the manual Stop path) so a mid-session return to setup
+  // never leaves the engine or SyncRecorder armed underneath.
+  const handleBackToSetup = async () => {
+    if (phase !== "idle") {
+      await stop();
+      setPhase("idle");
+      setCountInBeat(null);
+    }
+    setShowSetup(true);
   };
 
   // SyncRecorder calls this once, synchronously, the instant the bars
@@ -187,8 +210,10 @@ export default function Home() {
         <SessionReport
           summary={report}
           onNewSession={() => {
+            // Back to the metronome/recording screen, not the setup step —
+            // bars/subdivision already chosen stay as they are.
             setReport(null);
-            setShowSetup(true);
+            setShowSetup(false);
           }}
         />
       </View>
@@ -201,6 +226,40 @@ export default function Home() {
         className="flex-1 bg-black px-5 justify-center"
         style={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }}
       >
+        <Pressable
+          onPress={() => setShowBackPopup(true)}
+          className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
+          style={{
+            top: insets.top + 12,
+            left: 16,
+            backgroundColor: "rgba(255,255,255,0.08)",
+          }}
+        >
+          <Text className="text-white text-lg">←</Text>
+        </Pressable>
+
+        <Modal
+          visible={showBackPopup}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowBackPopup(false)}
+        >
+          <Pressable
+            className="flex-1 items-center justify-center px-10"
+            style={{ backgroundColor: "rgba(0,0,0,0.75)" }}
+            onPress={() => setShowBackPopup(false)}
+          >
+            <View className="bg-neutral-900 rounded-2xl px-8 py-7 border border-white/10">
+              <Text
+                className="text-xl font-bold text-center"
+                style={{ color: "#FF3B30" }}
+              >
+                Dove cazzo vuoi andare?
+              </Text>
+            </View>
+          </Pressable>
+        </Modal>
+
         <SessionSetup
           bars={setupBars}
           onBarsChange={setSetupBars}
@@ -224,6 +283,19 @@ export default function Home() {
 
   return (
     <View className="flex-1 bg-black">
+      <Pressable
+        onPress={handleBackToSetup}
+        className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
+        style={{
+          top: insets.top + 12,
+          left: 16,
+          zIndex: 10,
+          backgroundColor: "rgba(255,255,255,0.08)",
+        }}
+      >
+        <Text className="text-white text-lg">←</Text>
+      </Pressable>
+
       <View
         className="flex-1 px-5 justify-between"
         style={{
@@ -244,9 +316,13 @@ export default function Home() {
 
         <DarkPanel className="px-5 py-5 gap-4">
           <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-            Quartine · Ottavi
+            {SUBDIVISION_LABELS[setupSubdivision]}
           </Text>
-          <BeatIndicator isActive={phase !== "idle"} bpm={bpm} />
+          <BeatIndicator
+            isActive={phase !== "idle"}
+            bpm={bpm}
+            subdivision={setupSubdivision}
+          />
         </DarkPanel>
 
         {!isCountIn && (
@@ -275,6 +351,7 @@ export default function Home() {
           isArmed={phase !== "idle"}
           countInBeats={COUNT_IN_BEATS}
           bpm={bpm}
+          subdivision={setupSubdivision}
           maxBars={setupBars}
           onSessionEnd={handleSessionEnd}
           onStatusChange={handleStatusChange}

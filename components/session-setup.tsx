@@ -1,24 +1,25 @@
 import DarkPanel from "@/components/dark-panel";
+import type { Subdivision } from "@/components/sync-recorder";
 import { Pressable, Text, View } from "react-native";
-
-// UI-only for now (see app/index.tsx) — no wiring to the metronome engine,
-// SyncRecorder, or session start/stop yet. Bars/subdivision selection is
-// purely local visual state until that logic is connected later.
-export type SetupSubdivision = "quarter" | "eighth" | "triplet" | "sixteenth";
 
 const ACTIVE_COLOR = "#39FF6A";
 const SQUARE_SIZE = 44;
 
 const BARS_OPTIONS = [1, 2, 3, 4] as const;
 
-const TEMPO_OPTIONS: { key: SetupSubdivision; label: string }[] = [
+// Only "quarter" and "eighth" are actually wired to the real detection
+// engine (see sync-recorder.tsx/beat-indicator.tsx) — "triplet" and
+// "sixteenth" stay visible but disabled until validated on-device, so
+// there's nothing left to build here when we unlock them (just remove
+// `disabled`).
+const TEMPO_OPTIONS: { key: Subdivision; label: string; disabled?: boolean }[] = [
   { key: "quarter", label: "Quarti" },
   { key: "eighth", label: "Ottavi" },
-  { key: "triplet", label: "Terzine" },
-  { key: "sixteenth", label: "Quartine" },
+  { key: "triplet", label: "Terzine", disabled: true },
+  { key: "sixteenth", label: "Quartine", disabled: true },
 ];
 
-function SelectSquare({ selected }: { selected: boolean }) {
+function SelectSquare({ selected, disabled }: { selected: boolean; disabled?: boolean }) {
   return (
     <View
       style={{
@@ -28,6 +29,7 @@ function SelectSquare({ selected }: { selected: boolean }) {
         borderWidth: 2,
         borderColor: selected ? ACTIVE_COLOR : "rgba(255,255,255,0.25)",
         backgroundColor: selected ? "rgba(57,255,106,0.15)" : "transparent",
+        opacity: disabled ? 0.35 : 1,
       }}
     />
   );
@@ -36,8 +38,8 @@ function SelectSquare({ selected }: { selected: boolean }) {
 type SessionSetupProps = {
   bars: number;
   onBarsChange: (bars: number) => void;
-  subdivision: SetupSubdivision;
-  onSubdivisionChange: (subdivision: SetupSubdivision) => void;
+  subdivision: Subdivision;
+  onSubdivisionChange: (subdivision: Subdivision) => void;
   onStart: () => void;
 };
 
@@ -73,21 +75,25 @@ export default function SessionSetup({
           Tempo
         </Text>
         <View className="flex-row justify-between">
-          {TEMPO_OPTIONS.map(({ key, label }) => {
+          {TEMPO_OPTIONS.map(({ key, label, disabled }) => {
             const selected = subdivision === key;
             return (
               <Pressable
                 key={key}
-                onPress={() => onSubdivisionChange(key)}
+                onPress={() => !disabled && onSubdivisionChange(key)}
+                disabled={disabled}
                 className="items-center gap-2 active:opacity-70"
               >
                 <Text
                   className="text-xs font-semibold"
-                  style={{ color: selected ? ACTIVE_COLOR : "#F2F2F7" }}
+                  style={{
+                    color: selected ? ACTIVE_COLOR : "#F2F2F7",
+                    opacity: disabled ? 0.35 : 1,
+                  }}
                 >
                   {label}
                 </Text>
-                <SelectSquare selected={selected} />
+                <SelectSquare selected={selected} disabled={disabled} />
               </Pressable>
             );
           })}
