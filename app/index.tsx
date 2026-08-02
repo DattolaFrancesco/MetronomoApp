@@ -36,6 +36,13 @@ const SUBDIVISION_LABELS: Record<Subdivision, string> = {
 
 type Phase = "idle" | "countIn" | "recording";
 
+type ToleranceLevel = "easy" | "medium" | "hard";
+const TOLERANCE_OPTIONS: { level: ToleranceLevel; label: string; ms: number }[] = [
+  { level: "easy", label: "Facile", ms: 130 },
+  { level: "medium", label: "Media", ms: 100 },
+  { level: "hard", label: "Difficile", ms: 80 },
+];
+
 const STATUS_META: Record<
   OnsetStatus,
   { label: string; color: string; bg: string }
@@ -53,6 +60,74 @@ const IDLE_META = { color: "#8E8E93", bg: "rgba(142,142,147,0.10)" };
 function StatusDot({ color }: { color: string }) {
   return (
     <View className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+  );
+}
+
+// A tap-to-open dropdown (no native picker dependency needed) — only
+// visible/editable while phase === "idle", same as the triplet-note
+// picker below, so the choice locks in before the count-in starts.
+function ToleranceDropdown({
+  level,
+  onChange,
+}: {
+  level: ToleranceLevel;
+  onChange: (level: ToleranceLevel) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = TOLERANCE_OPTIONS.find((o) => o.level === level)!;
+
+  return (
+    <View>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        className="flex-row items-center justify-between px-4 py-3 rounded-xl active:opacity-70"
+        style={{ backgroundColor: "rgba(255,255,255,0.06)" }}
+      >
+        <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+          Tolleranza
+        </Text>
+        <View className="flex-row items-center gap-2">
+          <Text className="text-white text-sm font-bold">
+            {current.label} · {current.ms}ms
+          </Text>
+          <Text className="text-neutral-500 text-xs">{open ? "▲" : "▼"}</Text>
+        </View>
+      </Pressable>
+
+      {open && (
+        <View
+          className="mt-1.5 rounded-xl overflow-hidden"
+          style={{ backgroundColor: "rgba(255,255,255,0.06)" }}
+        >
+          {TOLERANCE_OPTIONS.map((option) => {
+            const selected = option.level === level;
+            return (
+              <Pressable
+                key={option.level}
+                onPress={() => {
+                  onChange(option.level);
+                  setOpen(false);
+                }}
+                className="flex-row items-center justify-between px-4 py-3 active:opacity-70"
+              >
+                <Text
+                  className="text-sm font-semibold"
+                  style={{ color: selected ? BPM_COLOR : "#F2F2F7" }}
+                >
+                  {option.label}
+                </Text>
+                <Text
+                  className="text-xs font-semibold"
+                  style={{ color: selected ? BPM_COLOR : "#8E8E93" }}
+                >
+                  {option.ms}ms
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -91,6 +166,9 @@ export default function Home() {
   // setupSubdivision is "triplet". Chosen on the recording screen itself,
   // not the setup step (see the picker below, gated to phase === "idle").
   const [tripletTarget, setTripletTarget] = useState<TripletTarget>(2);
+  const [toleranceLevel, setToleranceLevel] = useState<ToleranceLevel>("medium");
+  const toleranceMs =
+    TOLERANCE_OPTIONS.find((o) => o.level === toleranceLevel)?.ms ?? 100;
 
   const phaseRef = useRef<Phase>("idle");
   const insets = useSafeAreaInsets();
@@ -333,6 +411,10 @@ export default function Home() {
           )}
         </DarkPanel>
 
+        {phase === "idle" && (
+          <ToleranceDropdown level={toleranceLevel} onChange={setToleranceLevel} />
+        )}
+
         {!isCountIn && (
           <View
             className="flex-row items-center justify-between px-5 py-3.5 rounded-2xl border"
@@ -361,6 +443,7 @@ export default function Home() {
           bpm={bpm}
           subdivision={setupSubdivision}
           tripletTarget={tripletTarget}
+          toleranceMs={toleranceMs}
           maxBars={setupBars}
           onSessionEnd={handleSessionEnd}
           onStatusChange={handleStatusChange}

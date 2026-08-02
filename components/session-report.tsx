@@ -9,45 +9,6 @@ import type {
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-// Same look as the classic iOS audio-recording waveform (Voice Memos/Note
-// attachments): thin rounded bars, mirrored top/bottom around a fixed-height
-// row's vertical center, scrollable rather than squeezed so bar width stays
-// readable regardless of session length. Reads summary.waveform directly —
-// the exact same amplitude data already backing the Debug chart's bars and
-// the live "Input audio" view during recording, just restyled.
-const RECORDING_WAVEFORM_HEIGHT = 64;
-const RECORDING_WAVEFORM_BAR_WIDTH = 3;
-const RECORDING_WAVEFORM_BAR_GAP = 2;
-const RECORDING_WAVEFORM_BAR_COLOR = "#E5E5EA";
-
-function RecordingWaveform({ waveform }: { waveform: number[] }) {
-  return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={{ height: RECORDING_WAVEFORM_HEIGHT }}
-    >
-      <View
-        className="flex-row items-center"
-        style={{ height: RECORDING_WAVEFORM_HEIGHT }}
-      >
-        {waveform.map((amp, i) => (
-          <View
-            key={i}
-            style={{
-              width: RECORDING_WAVEFORM_BAR_WIDTH,
-              marginRight: RECORDING_WAVEFORM_BAR_GAP,
-              height: Math.max(3, amp * RECORDING_WAVEFORM_HEIGHT),
-              borderRadius: RECORDING_WAVEFORM_BAR_WIDTH / 2,
-              backgroundColor: RECORDING_WAVEFORM_BAR_COLOR,
-            }}
-          />
-        ))}
-      </View>
-    </ScrollView>
-  );
-}
-
 const STATUS_META: Record<
   OnsetStatus,
   { label: string; color: string; bg: string }
@@ -202,13 +163,6 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
               </View>
             </>
           )}
-        </DarkPanel>
-
-        <DarkPanel className="px-4 py-4 gap-3 w-full">
-          <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-            Waveform registrazione
-          </Text>
-          <RecordingWaveform waveform={summary.waveform} />
         </DarkPanel>
 
         <DarkPanel className="px-4 py-4 gap-3 w-full">
