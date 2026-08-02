@@ -32,6 +32,7 @@ const MAX_PX_PER_MS = 1.6;
 const BARLINE_COLOR = "rgba(255,255,255,0.6)";
 const QUARTER_TICK_COLOR = "#FFFFFF";
 const EIGHTH_TICK_COLOR = "rgba(255,255,255,0.14)";
+const WAVEFORM_BAR_COLOR = "rgba(57,255,106,0.35)";
 
 // Onset line color follows the same on-time/early/late classification
 // already computed in sync-recorder.tsx (OnsetEvent.status, against
@@ -126,6 +127,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
       </Text>
 
       <View className="flex-row flex-wrap gap-x-3 gap-y-1">
+        <LegendLine color={WAVEFORM_BAR_COLOR} label="livello microfono" />
         <LegendLine color={QUARTER_TICK_COLOR} label="beat atteso" />
         <LegendLine color={ONSET_STATUS_COLOR.onTime} label="colpo a tempo" />
         <LegendLine color={ONSET_STATUS_COLOR.early} label="colpo non a tempo" />
@@ -134,6 +136,30 @@ export default function DebugChart({ summary }: DebugChartProps) {
       <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: CHART_TOTAL_HEIGHT + 40 }}>
         <GestureDetector gesture={pinchGesture}>
           <Animated.View style={[{ width: contentWidth, height: CHART_TOTAL_HEIGHT + 40 }, previewStyle]}>
+            {/* Mic level for the whole session — same raw amplitude source
+                and bucketing as the live "Input audio" waveform during
+                recording (see WAVEFORM_SAMPLE_INTERVAL_MS in
+                sync-recorder.tsx), just re-rendered here against the full
+                session timeline. Drawn first so the grid/onset lines above
+                stay legible on top of it. */}
+            {summary.waveform.map((amp, i) => {
+              const barHeight = Math.max(1, amp * CHART_HEIGHT);
+              return (
+                <View
+                  key={`wf-${i}`}
+                  pointerEvents="none"
+                  style={{
+                    position: "absolute",
+                    left: i * WAVEFORM_SAMPLE_INTERVAL_MS * pxPerMs,
+                    top: TOP_LABEL_LANE + CHART_HEIGHT - barHeight,
+                    width: Math.max(1, WAVEFORM_SAMPLE_INTERVAL_MS * pxPerMs - 1),
+                    height: barHeight,
+                    backgroundColor: WAVEFORM_BAR_COLOR,
+                  }}
+                />
+              );
+            })}
+
             {/* Beat grid: quarter/eighth ticks + numbered barlines */}
             {grid.map((t) => {
               if (t.type === "eighth") {
