@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <ellipse cx="16" cy="50" rx="8.5" ry="6.5" fill="currentColor" transform="rotate(-20 16 50)"></ellipse>
+  <ellipse cx="44" cy="50" rx="8.5" ry="6.5" fill="currentColor" transform="rotate(-20 44 50)"></ellipse>
+  <rect x="22.2" y="12" width="3" height="36" rx="1.5" fill="currentColor"></rect>
+  <rect x="50.2" y="12" width="3" height="36" rx="1.5" fill="currentColor"></rect>
+  <path d="M22.2 10 L53.2 10 L53.2 16 L22.2 16 Z" fill="currentColor"></path>
+  <path d="M22.2 20 L53.2 20 L53.2 26 L22.2 26 Z" fill="currentColor"></path>
+</svg>

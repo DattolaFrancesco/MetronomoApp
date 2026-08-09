@@ -1,7 +1,7 @@
 import BeatIndicator from "@/components/beat-indicator";
 import DarkPanel from "@/components/dark-panel";
 import SessionReport from "@/components/session-report";
-import SessionSetup from "@/components/session-setup";
+import SessionSetup, { GlowDivider } from "@/components/session-setup";
 import SyncRecorder, {
   type OnsetStatus,
   type SessionSummary,
@@ -22,130 +22,219 @@ import ExpoPrecisionMetronomeModule, {
 } from "expo-precision-metronome";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { runOnJS, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const BPM_STEP = 5;
-const BPM_COLOR = "#39FF6A";
+const ACCENT_COLOR = "#FF3B30";
 const COUNT_IN_BEATS = 4;
 
+// Single-word subdivision label for the recording screen's header —
+// matches the labels already used on the setup screen's Tempo carousel
+// (see components/session-setup.tsx's TEMPO_OPTIONS).
 const SUBDIVISION_LABELS: Record<Subdivision, string> = {
   quarter: "Quarti",
-  eighth: "Quarti · Ottavi",
-  triplet: "Quarti · Terzine",
-  sixteenth: "Quarti · Sedicesimi",
+  eighth: "Ottavi",
+  triplet: "Terzine",
+  sixteenth: "Quartine",
 };
 
 type Phase = "idle" | "countIn" | "recording";
 
-type ToleranceLevel = "easy" | "medium" | "hard";
-const TOLERANCE_OPTIONS: { level: ToleranceLevel; label: string; ms: number }[] = [
-  { level: "easy", label: "Facile", ms: 130 },
-  { level: "medium", label: "Media", ms: 100 },
-  { level: "hard", label: "Difficile", ms: 80 },
-];
+const TOLERANCE_MIN_MS = 30;
+const TOLERANCE_MAX_MS = 200;
+const DEFAULT_TOLERANCE_MS = 100;
 
-const STATUS_META: Record<
-  OnsetStatus,
-  { label: string; color: string; bg: string }
-> = {
-  onTime: { label: "A TEMPO", color: "#39FF6A", bg: "rgba(57,255,106,0.12)" },
-  early: {
-    label: "IN ANTICIPO",
-    color: "#FF9F0A",
-    bg: "rgba(255,159,10,0.12)",
-  },
-  late: { label: "IN RITARDO", color: "#FF453A", bg: "rgba(255,69,58,0.12)" },
+const STATUS_META: Record<OnsetStatus, { label: string; color: string }> = {
+  onTime: { label: "A TEMPO", color: "#39FF6A" },
+  early: { label: "IN ANTICIPO", color: "#FF9F0A" },
+  late: { label: "IN RITARDO", color: "#FF453A" },
 };
-const IDLE_META = { color: "#8E8E93", bg: "rgba(142,142,147,0.10)" };
+const IDLE_COLOR = ACCENT_COLOR;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 function StatusDot({ color }: { color: string }) {
   return (
-    <View className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+    <View
+      className="w-2 h-2 rounded-full"
+      style={{
+        backgroundColor: color,
+        shadowColor: color,
+        shadowOpacity: 0.8,
+        shadowRadius: 5,
+        shadowOffset: { width: 0, height: 0 },
+      }}
+    />
   );
 }
 
-// A tap-to-open dropdown (no native picker dependency needed) — only
-// visible/editable while phase === "idle", same as the triplet-note
+// Draggable continuous slider (30-200ms) with a glowing red thumb/track —
+// only visible/editable while phase === "idle", same as the triplet-note
 // picker below, so the choice locks in before the count-in starts.
-function ToleranceDropdown({
-  level,
+function ToleranceSlider({
+  toleranceMs,
   onChange,
 }: {
-  level: ToleranceLevel;
-  onChange: (level: ToleranceLevel) => void;
+  toleranceMs: number;
+  onChange: (ms: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const current = TOLERANCE_OPTIONS.find((o) => o.level === level)!;
+  const [trackWidth, setTrackWidth] = useState(0);
+  const THUMB_SIZE = 22;
+
+  const updateFromX = (x: number) => {
+    if (trackWidth <= 0) return;
+    const ratio = clamp(x / trackWidth, 0, 1);
+    onChange(Math.round(TOLERANCE_MIN_MS + ratio * (TOLERANCE_MAX_MS - TOLERANCE_MIN_MS)));
+  };
+
+  // Not memoized: Gesture objects are cheap, plain descriptors (not native
+  // handles), and GestureDetector is meant to receive a fresh one each
+  // render — this is the pattern react-native-gesture-handler's own docs
+  // use (see the pinch gesture in debug-chart.tsx). That means this always
+  // closes over the current trackWidth/onChange with no ref needed.
+  const pan = Gesture.Pan()
+    .onBegin((e) => {
+      "worklet";
+      runOnJS(updateFromX)(e.x);
+    })
+    .onUpdate((e) => {
+      "worklet";
+      runOnJS(updateFromX)(e.x);
+    });
+
+  const ratio =
+    trackWidth === 0
+      ? 0
+      : clamp((toleranceMs - TOLERANCE_MIN_MS) / (TOLERANCE_MAX_MS - TOLERANCE_MIN_MS), 0, 1);
+  const thumbX = ratio * trackWidth;
 
   return (
-    <View>
-      <Pressable
-        onPress={() => setOpen((v) => !v)}
-        className="flex-row items-center justify-between px-4 py-3 rounded-xl active:opacity-70"
-        style={{ backgroundColor: "rgba(255,255,255,0.06)" }}
-      >
-        <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+    <DarkPanel className="px-5 py-5 gap-4">
+      <View className="flex-row items-center justify-between">
+        <Text className="text-neutral-500 text-[11px] font-bold uppercase tracking-[2px]">
           Tolleranza
         </Text>
-        <View className="flex-row items-center gap-2">
-          <Text className="text-white text-sm font-bold">
-            {current.label} · {current.ms}ms
-          </Text>
-          <Text className="text-neutral-500 text-xs">{open ? "▲" : "▼"}</Text>
-        </View>
-      </Pressable>
+        <Text className="text-white text-sm font-extrabold">{toleranceMs}ms</Text>
+      </View>
 
-      {open && (
+      <GestureDetector gesture={pan}>
         <View
-          className="mt-1.5 rounded-xl overflow-hidden"
-          style={{ backgroundColor: "rgba(255,255,255,0.06)" }}
+          onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+          style={{ height: 28, justifyContent: "center" }}
         >
-          {TOLERANCE_OPTIONS.map((option) => {
-            const selected = option.level === level;
-            return (
-              <Pressable
-                key={option.level}
-                onPress={() => {
-                  onChange(option.level);
-                  setOpen(false);
-                }}
-                className="flex-row items-center justify-between px-4 py-3 active:opacity-70"
-              >
-                <Text
-                  className="text-sm font-semibold"
-                  style={{ color: selected ? BPM_COLOR : "#F2F2F7" }}
-                >
-                  {option.label}
-                </Text>
-                <Text
-                  className="text-xs font-semibold"
-                  style={{ color: selected ? BPM_COLOR : "#8E8E93" }}
-                >
-                  {option.ms}ms
-                </Text>
-              </Pressable>
-            );
-          })}
+          <View
+            style={{ height: 3, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.15)" }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              left: 0,
+              height: 3,
+              width: thumbX,
+              borderRadius: 2,
+              backgroundColor: ACCENT_COLOR,
+            }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              left: thumbX - THUMB_SIZE / 2,
+              width: THUMB_SIZE,
+              height: THUMB_SIZE,
+              borderRadius: THUMB_SIZE / 2,
+              backgroundColor: ACCENT_COLOR,
+              shadowColor: ACCENT_COLOR,
+              shadowOpacity: 0.8,
+              shadowRadius: 10,
+              shadowOffset: { width: 0, height: 0 },
+            }}
+          />
         </View>
-      )}
-    </View>
+      </GestureDetector>
+
+      <View className="flex-row items-center justify-between">
+        <Text className="text-neutral-500 text-[10px] font-semibold uppercase tracking-wider">
+          Preciso · {TOLERANCE_MIN_MS}
+        </Text>
+        <Text className="text-neutral-500 text-[10px] font-semibold uppercase tracking-wider">
+          Rilassato · {TOLERANCE_MAX_MS}
+        </Text>
+      </View>
+    </DarkPanel>
   );
 }
 
-function RoundButton({
-  label,
-  onPress,
+const TICK_COUNT = 25;
+// How many screen pixels of horizontal drag equal one BPM step — a scrub
+// ruler (relative drag), not a position-mapped slider: the tick strip
+// itself doesn't move, only the centered accent tick represents "current
+// value", same visual language as a camera exposure dial.
+const PX_PER_BPM = 6;
+
+function TempoRuler({
+  bpm,
+  onChange,
 }: {
-  label: string;
-  onPress: () => void;
+  bpm: number;
+  onChange: (bpm: number) => void;
 }) {
+  // The bpm this gesture started from — a shared (UI-thread) value instead
+  // of a ref, set once per gesture in onBegin and read from onUpdate, so
+  // e.translationX (cumulative since gesture start, provided by RNGH) is
+  // always applied relative to a fixed baseline instead of the
+  // continuously-changing current bpm.
+  const bpmAtGestureStart = useSharedValue(bpm);
+
+  // Not memoized: Gesture objects are cheap, plain descriptors (not native
+  // handles), and GestureDetector is meant to receive a fresh one each
+  // render — this is the pattern react-native-gesture-handler's own docs
+  // use (see the pinch gesture in debug-chart.tsx). That means onBegin
+  // always captures the current `bpm` prop, and onUpdate always calls the
+  // current `onChange` prop, with no ref needed for either.
+  const pan = Gesture.Pan()
+    .onBegin(() => {
+      "worklet";
+      bpmAtGestureStart.value = bpm;
+    })
+    .onUpdate((e) => {
+      "worklet";
+      const deltaBpm = Math.round(e.translationX / PX_PER_BPM);
+      const next = Math.min(BPM_MAX, Math.max(BPM_MIN, bpmAtGestureStart.value + deltaBpm));
+      runOnJS(onChange)(next);
+    });
+
+  const centerIndex = Math.floor(TICK_COUNT / 2);
+
   return (
-    <Pressable
-      onPress={onPress}
-      className="w-14 h-14 rounded-full border border-white/20 items-center justify-center active:opacity-60"
-    >
-      <Text className="text-2xl font-semibold text-white">{label}</Text>
-    </Pressable>
+    <GestureDetector gesture={pan}>
+      <View className="flex-row items-center justify-between" style={{ height: 32 }}>
+        {Array.from({ length: TICK_COUNT }).map((_, i) => {
+          const isCenter = i === centerIndex;
+          return (
+            <View
+              key={i}
+              style={{
+                width: isCenter ? 2 : 1,
+                height: isCenter ? 30 : 18,
+                borderRadius: 1,
+                backgroundColor: isCenter ? ACCENT_COLOR : "rgba(255,255,255,0.3)",
+                ...(isCenter
+                  ? {
+                      shadowColor: ACCENT_COLOR,
+                      shadowOpacity: 0.85,
+                      shadowRadius: 8,
+                      shadowOffset: { width: 0, height: 0 },
+                    }
+                  : null),
+              }}
+            />
+          );
+        })}
+      </View>
+    </GestureDetector>
   );
 }
 
@@ -167,9 +256,7 @@ export default function Home() {
   // setupSubdivision is "triplet". Chosen on the recording screen itself,
   // not the setup step (see the picker below, gated to phase === "idle").
   const [tripletTarget, setTripletTarget] = useState<TripletTarget>(2);
-  const [toleranceLevel, setToleranceLevel] = useState<ToleranceLevel>("medium");
-  const toleranceMs =
-    TOLERANCE_OPTIONS.find((o) => o.level === toleranceLevel)?.ms ?? 100;
+  const [toleranceMs, setToleranceMs] = useState(DEFAULT_TOLERANCE_MS);
 
   const phaseRef = useRef<Phase>("idle");
   const insets = useSafeAreaInsets();
@@ -226,7 +313,7 @@ export default function Home() {
 
   // Leaves the setup step and reveals the metronome screen underneath —
   // setupBars and setupSubdivision are both wired to the real session now
-  // (passed to SyncRecorder/BeatIndicator below).
+  // (passed to SyncRecorder below).
   const handleSetupStart = () => {
     setShowSetup(false);
   };
@@ -256,10 +343,10 @@ export default function Home() {
     setShowSetup(true);
   };
 
-  const changeBpm = (delta: number) => {
-    const newBpm = Math.min(BPM_MAX, Math.max(BPM_MIN, bpm + delta));
-    setBpm(newBpm);
-    if (phase !== "idle") setEngineBpm(newBpm);
+  const applyBpm = (newBpm: number) => {
+    const clamped = clamp(newBpm, BPM_MIN, BPM_MAX);
+    setBpm(clamped);
+    if (phase !== "idle") setEngineBpm(clamped);
   };
 
   const handleSessionEnd = (summary: SessionSummary) => {
@@ -304,9 +391,9 @@ export default function Home() {
   if (showSetup) {
     return (
       <LinearGradient
-        colors={["#1E6F63", "#0D3C38", "#071615"]}
+        colors={["#242426", "#1C1C1E", "#141416"]}
         start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+        end={{ x: 0, y: 1 }}
         style={{
           flex: 1,
           paddingHorizontal: 20,
@@ -332,24 +419,15 @@ export default function Home() {
     : phase === "recording"
       ? "IN ASCOLTO"
       : "PRONTO";
-  const color = statusMeta ? statusMeta.color : IDLE_META.color;
-  const bg = statusMeta ? statusMeta.bg : IDLE_META.bg;
+  const color = statusMeta ? statusMeta.color : IDLE_COLOR;
 
   return (
-    <View className="flex-1 bg-black">
-      <Pressable
-        onPress={handleBackToSetup}
-        className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
-        style={{
-          top: insets.top + 12,
-          left: 16,
-          zIndex: 10,
-          backgroundColor: "rgba(255,255,255,0.08)",
-        }}
-      >
-        <Text className="text-white text-lg">←</Text>
-      </Pressable>
-
+    <LinearGradient
+      colors={["#242426", "#1C1C1E", "#141416"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      style={{ flex: 1 }}
+    >
       <View
         className="flex-1 px-5 justify-between"
         style={{
@@ -357,6 +435,30 @@ export default function Home() {
           paddingBottom: insets.bottom + 24,
         }}
       >
+        <View style={{ height: 40, justifyContent: "center" }}>
+          <Pressable
+            onPress={handleBackToSetup}
+            className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
+            style={{
+              left: 0,
+              zIndex: 10,
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+            }}
+          >
+            <Text className="text-white text-lg">←</Text>
+          </Pressable>
+          <Text
+            className="text-center text-lg font-extrabold uppercase tracking-[3px]"
+            style={{ color: ACCENT_COLOR }}
+          >
+            {SUBDIVISION_LABELS[setupSubdivision]}
+          </Text>
+        </View>
+
+        <GlowDivider />
+
         {isCountIn && (
           <View className="items-center justify-center py-2">
             <Text
@@ -368,81 +470,75 @@ export default function Home() {
           </View>
         )}
 
-        <DarkPanel className="px-5 py-5 gap-4">
-          <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-            {SUBDIVISION_LABELS[setupSubdivision]}
-          </Text>
+        {/* Only shown once a session is actually running (after Avvia) —
+            the setup screen already lets you preview subdivisions before
+            starting, so there's nothing useful to light up while idle. */}
+        {phase !== "idle" && (
           <BeatIndicator
-            isActive={phase !== "idle"}
+            isActive
             bpm={bpm}
             subdivision={setupSubdivision}
             tripletTarget={tripletTarget}
           />
+        )}
 
-          {/* Which triplet note to evaluate — only meaningful for "triplet",
-              and only changeable before Start (the count-in/recording
-              locks it in, same as bars/tempo on the setup screen). The
-              1st note always coincides with the quarter/battere, so it's
-              never a selectable target — only "2"/"3" (see TripletTarget). */}
-          {setupSubdivision === "triplet" && phase === "idle" && (
-            <View className="flex-row items-center justify-center gap-3">
-              <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-                Nota da valutare
-              </Text>
-              <View className="flex-row gap-2">
-                {([2, 3] as const).map((n) => {
-                  const selected = tripletTarget === n;
-                  return (
-                    <Pressable
-                      key={n}
-                      onPress={() => setTripletTarget(n)}
-                      className="w-9 h-9 rounded-lg items-center justify-center active:opacity-70"
-                      style={{
-                        borderWidth: 2,
-                        borderColor: selected ? BPM_COLOR : "rgba(255,255,255,0.25)",
-                        backgroundColor: selected
-                          ? "rgba(57,255,106,0.15)"
-                          : "transparent",
-                      }}
+        {/* Which triplet note to evaluate — only meaningful for "triplet",
+            and only changeable before Start (the count-in/recording
+            locks it in, same as bars/tempo on the setup screen). The
+            1st note always coincides with the quarter/battere, so it's
+            never a selectable target — only "2"/"3" (see TripletTarget). */}
+        {setupSubdivision === "triplet" && phase === "idle" && (
+          <View className="flex-row items-center justify-center gap-3">
+            <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+              Nota da valutare
+            </Text>
+            <View className="flex-row gap-2">
+              {([2, 3] as const).map((n) => {
+                const selected = tripletTarget === n;
+                return (
+                  <Pressable
+                    key={n}
+                    onPress={() => setTripletTarget(n)}
+                    className="w-9 h-9 rounded-lg items-center justify-center active:opacity-70"
+                    style={{
+                      borderWidth: 2,
+                      borderColor: selected ? ACCENT_COLOR : "rgba(255,255,255,0.25)",
+                      backgroundColor: selected
+                        ? "rgba(255,59,48,0.15)"
+                        : "transparent",
+                    }}
+                  >
+                    <Text
+                      className="text-sm font-bold"
+                      style={{ color: selected ? ACCENT_COLOR : "#F2F2F7" }}
                     >
-                      <Text
-                        className="text-sm font-bold"
-                        style={{ color: selected ? BPM_COLOR : "#F2F2F7" }}
-                      >
-                        {n}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+                      {n}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          )}
-        </DarkPanel>
+          </View>
+        )}
 
         {phase === "idle" && (
-          <ToleranceDropdown level={toleranceLevel} onChange={setToleranceLevel} />
+          <ToleranceSlider toleranceMs={toleranceMs} onChange={setToleranceMs} />
         )}
 
         {!isCountIn && (
-          <View
-            className="flex-row items-center justify-between px-5 py-3.5 rounded-2xl border"
-            style={{ backgroundColor: bg, borderColor: `${color}33` }}
-          >
+          <DarkPanel className="flex-row items-center justify-between px-5 py-3.5">
             <View className="flex-row items-center gap-2">
               <StatusDot color={color} />
-              <Text
-                className="text-xs font-bold tracking-[1px]"
-                style={{ color }}
-              >
+              <Text className="text-xs font-bold tracking-[1px]" style={{ color }}>
                 {label}
               </Text>
             </View>
             <Text className="text-white/70 text-xs font-semibold">
               {syncOffsetMs === null
-                ? "—"
+                ? "−"
                 : `${syncOffsetMs > 0 ? "+" : ""}${Math.round(syncOffsetMs)} ms`}
             </Text>
-          </View>
+          </DarkPanel>
         )}
 
         <SyncRecorder
@@ -460,54 +556,57 @@ export default function Home() {
         />
 
         <View className="items-center">
-          <Text className="text-7xl font-bold" style={{ color: BPM_COLOR }}>
-            {bpm}
-          </Text>
-          <Text className="text-neutral-500 text-xs font-semibold tracking-widest mt-1">
+          <Text className="text-7xl font-bold text-white">{bpm}</Text>
+          <Text
+            className="text-xs font-bold tracking-widest mt-1"
+            style={{ color: ACCENT_COLOR }}
+          >
             BPM
           </Text>
         </View>
 
-        <View className="flex-row items-center justify-center gap-10 mt-2">
-          <RoundButton label="−" onPress={() => changeBpm(-BPM_STEP)} />
-          <RoundButton label="+" onPress={() => changeBpm(BPM_STEP)} />
-        </View>
+        <TempoRuler bpm={bpm} onChange={applyBpm} />
 
         <Pressable
           onPress={togglePlay}
-          className="self-center w-20 h-20 rounded-full items-center justify-center mt-2"
+          className="self-stretch py-5 rounded-2xl items-center justify-center active:opacity-70 border-2 flex-row gap-2.5"
           style={{
-            backgroundColor: "#FF3B30",
-            shadowColor: "#FF3B30",
-            shadowOpacity: 0.6,
-            shadowRadius: 16,
+            borderColor: ACCENT_COLOR,
+            shadowColor: ACCENT_COLOR,
+            shadowOpacity: 0.5,
+            shadowRadius: 14,
             shadowOffset: { width: 0, height: 0 },
           }}
         >
-          <View
-            style={
-              phase !== "idle"
-                ? {
-                    width: 22,
-                    height: 22,
-                    borderRadius: 4,
-                    backgroundColor: "white",
-                  }
-                : {
-                    width: 0,
-                    height: 0,
-                    borderTopWidth: 12,
-                    borderBottomWidth: 12,
-                    borderLeftWidth: 20,
-                    borderTopColor: "transparent",
-                    borderBottomColor: "transparent",
-                    borderLeftColor: "white",
-                    marginLeft: 4,
-                  }
-            }
-          />
+          {phase !== "idle" ? (
+            <View style={{ width: 16, height: 16, borderRadius: 3, backgroundColor: ACCENT_COLOR }} />
+          ) : (
+            <View
+              style={{
+                width: 0,
+                height: 0,
+                borderTopWidth: 9,
+                borderBottomWidth: 9,
+                borderLeftWidth: 14,
+                borderTopColor: "transparent",
+                borderBottomColor: "transparent",
+                borderLeftColor: ACCENT_COLOR,
+              }}
+            />
+          )}
+          <Text
+            className="text-xl font-extrabold uppercase tracking-widest"
+            style={{
+              color: ACCENT_COLOR,
+              textShadowColor: "rgba(255,59,48,0.6)",
+              textShadowRadius: 12,
+              textShadowOffset: { width: 0, height: 0 },
+            }}
+          >
+            {phase !== "idle" ? "Stop" : "Avvia"}
+          </Text>
         </Pressable>
       </View>
-    </View>
+    </LinearGradient>
   );
 }

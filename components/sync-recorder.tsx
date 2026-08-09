@@ -80,7 +80,7 @@ const STATUS_HOLD_MS = 180;
 
 const MAX_BAR_HEIGHT = 64;
 const WAVEFORM_PANEL_HEIGHT = 80;
-const BAR_COLOR = "#39FF6A";
+const BAR_COLOR = "#FF3B30";
 
 type PendingBeat = {
   beatIndex: number;

@@ -18,8 +18,8 @@ import Animated, {
 
 const BEATS_PER_BAR = 4;
 
-const ACTIVE_COLOR = "#39FF6A";
-const ACTIVE_TRANSPARENT = "rgba(57,255,106,0)";
+const ACTIVE_COLOR = "#FF3B30";
+const ACTIVE_TRANSPARENT = "rgba(255,59,48,0)";
 const INACTIVE_BORDER = "#3A3A3C";
 
 type BeatDotProps = {
