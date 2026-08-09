@@ -35,6 +35,24 @@ const SILENCE_FLOOR_DB = -50;
 // as a reference line.
 export const MIN_PEAK_AMPLITUDE = 0.3;
 
+// Minimum amplitude gain (same 0-1 normalized scale) from a local trough up
+// to a following local peak, for that peak to count as a genuine new attack
+// in analyzeSession's post-hoc peak search (see findOnsetPeaks) — not just
+// the previous hit's own decay tail, which can still be louder than
+// MIN_PEAK_AMPLITUDE (and even louder than the next hit's real, softer
+// attack) well into the next beat's search window, especially at wide
+// search radii (e.g. plain quarters, where the window spans half a beat
+// interval each side). Measured trough-to-peak rather than step-to-step
+// between adjacent buckets, because a real attack's rate of rise typically
+// tapers off right at its summit — the single last step up to the loudest
+// bucket is often smaller than this threshold even though the overall rise
+// from the trough clearly isn't, and comparing only consecutive buckets
+// would then flag some earlier, quieter point on the way up instead of the
+// actual peak. Raise this if decaying tails still get picked; lower it if
+// real (especially soft or gradually-attacked) hits start getting missed
+// entirely.
+const MIN_ONSET_RISE = 0.12;
+
 export const BEATS_PER_BAR = 4;
 
 // Rhythmic subdivision selected on the setup screen — how many equal
@@ -301,15 +319,46 @@ const WaveformBar = memo(function WaveformBar({
   );
 });
 
+// Marks every bucket that's a genuine attack peak: a local maximum (no
+// louder than either neighbor) reached by a rise of at least MIN_ONSET_RISE
+// from the closest preceding trough. Runs once over the whole session's
+// waveform, independent of any single beat's search window, so a trough
+// that sits just outside a window still counts — that's usually exactly
+// where a decaying previous hit bottoms out before the next one begins.
+// See MIN_ONSET_RISE for why this is trough-to-peak, not step-to-step.
+function findOnsetPeaks(waveform: number[]): boolean[] {
+  const isPeak = new Array(waveform.length).fill(false);
+  let trough = waveform.length > 0 ? waveform[0] : 0;
+  for (let b = 1; b < waveform.length - 1; b++) {
+    const amp = waveform[b];
+    if (amp < trough) {
+      trough = amp;
+      continue;
+    }
+    const isLocalMax = amp >= waveform[b - 1] && amp >= waveform[b + 1];
+    if (isLocalMax && amp - trough >= MIN_ONSET_RISE) {
+      isPeak[b] = true;
+      // Start tracking the next trough fresh from here, so a slow decay
+      // right after this peak doesn't get compared all the way back to the
+      // old (deeper) trough for the *next* candidate peak.
+      trough = amp;
+    }
+  }
+  return isPeak;
+}
+
 // Post-hoc analysis: run once at teardown directly over the same decimated
 // waveform already shown as bars in the report (see waveformRef/
 // WAVEFORM_SAMPLE_INTERVAL_MS) — no separate audio analysis, no real-time
 // prediction. For each point of interest (the levare, the chosen
-// triplet/sixteenth note, the beat itself) it just looks at the bars near
-// it and takes the tallest one, exactly like picking out the peak by eye.
-// The live pipeline in the component below still runs in parallel purely
-// to drive the approximate real-time status banner — this function is the
-// sole source of the report's events.
+// triplet/sixteenth note, the beat itself) it looks at the buckets near it
+// and takes the loudest one that's also a genuine attack peak (see
+// findOnsetPeaks) — not simply the tallest bucket, which a previous hit's
+// still-decaying tail could otherwise win if it hadn't faded below
+// MIN_PEAK_AMPLITUDE yet by the time this window opened. The live pipeline
+// in the component below still runs in parallel purely to drive the
+// approximate real-time status banner — this function is the sole source
+// of the report's events.
 function analyzeSession(
   waveform: number[],
   durationMs: number,
@@ -330,6 +379,8 @@ function analyzeSession(
   ) {
     return { events, rejectedPeaks };
   }
+
+  const onsetPeaks = findOnsetPeaks(waveform);
 
   const steps = SUBDIVISION_STEPS[subdivision];
   const subIntervalMs = beatIntervalMs / steps;
@@ -385,12 +436,15 @@ function analyzeSession(
       let bestBucket = -1;
       for (let b = firstBucket; b <= lastBucket; b++) {
         if (claimedBuckets.has(b)) continue;
-        if (waveform[b] > bestAmp) {
-          bestAmp = waveform[b];
+        if (!onsetPeaks[b]) continue;
+        const amp = waveform[b];
+        if (amp < MIN_PEAK_AMPLITUDE) continue;
+        if (amp > bestAmp) {
+          bestAmp = amp;
           bestBucket = b;
         }
       }
-      if (bestBucket === -1 || bestAmp < MIN_PEAK_AMPLITUDE) continue;
+      if (bestBucket === -1) continue;
       claimedBuckets.add(bestBucket);
 
       const peakTime = bestBucket * WAVEFORM_SAMPLE_INTERVAL_MS;
