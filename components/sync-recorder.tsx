@@ -53,6 +53,7 @@ import Animated, {
 export {
   BEATS_PER_BAR,
   CLICK_GATE_MS,
+  currentWindowHalfMs,
   DEFAULT_TOLERANCE_MS,
   MIN_PEAK_AMPLITUDE,
   SUBDIVISION_STEPS,
@@ -264,11 +265,26 @@ export default function SyncRecorder({
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The "beat 1" timestamp — elapsedMs=0 for everything reported (events,
+  // durationMs). Unlike waveformStartRef below, this is never shifted, so
+  // existing elapsedMs/deltaMs semantics stay exactly "relative to the
+  // true first beat" regardless of the pre-roll margin.
   const sessionStartRef = useRef<number | null>(null);
+  // When bucket index 0 of waveformRef actually starts — set as soon as
+  // the mic pipeline starts (the lead-in beat, see maybeStartAudioPipeline),
+  // *before* sessionStartRef, so real pre-roll audio is captured instead of
+  // discarded. Trimmed down to a small, tempo-adaptive margin (see
+  // leadInMsRef) the moment beat 1 actually arrives.
+  const waveformStartRef = useRef<number | null>(null);
+  // How far before sessionStartRef (true beat 1) waveformStartRef actually
+  // sits, after trimming — passed to analyzeSession/SessionSummary so it
+  // can convert between "true" elapsedMs and waveform-array bucket index.
+  const leadInMsRef = useRef(0);
   // Decimated (50ms bucket-max) amplitude history for the whole session —
   // this is both what the report's waveform bars are drawn from and what
   // analyzeSession() replays once at teardown to build events, instead of
-  // trying to classify each hit live as it happens.
+  // trying to classify each hit live as it happens. Indexed relative to
+  // waveformStartRef, not sessionStartRef — see leadInMsRef.
   const waveformRef = useRef<number[]>([]);
   const waveformBucketIndexRef = useRef(-1);
   const waveformBucketMaxRef = useRef(0);
@@ -503,9 +519,13 @@ export default function SyncRecorder({
     // loudest sample. Buckets are flushed to the array only once a later
     // sample proves them closed, so the very last one is flushed separately
     // on stop; any bucket skipped by a scheduling gap is backfilled with 0
-    // so array index -> elapsed time stays aligned with OnsetEvent.elapsedMs.
-    if (sessionStartRef.current !== null) {
-      const elapsed = now - sessionStartRef.current;
+    // so array index -> elapsed time stays aligned (see leadInMsRef for the
+    // offset between bucket index and true elapsedMs). Gated on
+    // waveformStartRef (set when the mic pipeline starts, one beat before
+    // sessionStartRef) rather than sessionStartRef itself, so real pre-roll
+    // audio from that lead-in beat is actually captured.
+    if (waveformStartRef.current !== null) {
+      const elapsed = now - waveformStartRef.current;
       const bucketIndex = Math.floor(elapsed / WAVEFORM_SAMPLE_INTERVAL_MS);
       if (bucketIndex !== waveformBucketIndexRef.current) {
         if (waveformBucketIndexRef.current >= 0) {
@@ -541,14 +561,21 @@ export default function SyncRecorder({
   // Starting this exactly on the tracked beat itself would still miss it —
   // recorder.record() has its own native startup latency even when already
   // prepared, so the lead-in beat absorbs that instead of the first hit.
+  // Also opens the waveform array right here (not at beat 1) so this whole
+  // lead-in beat's real audio is captured — maybeStartTrackedSession then
+  // trims it down to a small pre-roll margin once beat 1 actually arrives.
   // Idempotent: guarded by audioStartedRef so it only ever runs once per arm cycle.
-  function maybeStartAudioPipeline(beat: number) {
+  function maybeStartAudioPipeline(beat: number, now: number) {
     if (!isArmedRef.current || !preparedRef.current || audioStartedRef.current)
       return;
     const leadInBeat = Math.max(0, countInBeatsRef.current - 1);
     if (beat < leadInBeat) return;
 
     audioStartedRef.current = true;
+    waveformStartRef.current = now;
+    waveformRef.current = [];
+    waveformBucketIndexRef.current = -1;
+    waveformBucketMaxRef.current = 0;
     recorder.record();
     pollIntervalRef.current = setInterval(pollTick, POLL_INTERVAL_MS);
   }
@@ -568,10 +595,34 @@ export default function SyncRecorder({
 
     recordingStartedRef.current = true;
     recordingStartBeatRef.current = beat;
+
+    // The lead-in beat (maybeStartAudioPipeline, above) has been capturing
+    // real audio since roughly one full beat before now — trim that down
+    // to a small, tempo-adaptive pre-roll margin (same sizing as a beat's
+    // own onset-capture window) instead of keeping the whole beat, so a
+    // slow tempo doesn't turn into a huge "before the first quarter" slice.
+    // Only ever shrinks the array (never grows it) since the desired
+    // margin is always well under the elapsed lead-in beat.
+    if (waveformStartRef.current !== null) {
+      const desiredLeadInMs = currentWindowHalfMs(currentBeatIntervalMs());
+      const elapsedSinceWaveformStart = now - waveformStartRef.current;
+      const excessBuckets = Math.min(
+        waveformRef.current.length,
+        Math.floor(
+          (elapsedSinceWaveformStart - desiredLeadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS,
+        ),
+      );
+      if (excessBuckets > 0) {
+        waveformRef.current = waveformRef.current.slice(excessBuckets);
+        waveformStartRef.current += excessBuckets * WAVEFORM_SAMPLE_INTERVAL_MS;
+        waveformBucketIndexRef.current -= excessBuckets;
+      }
+      leadInMsRef.current = now - waveformStartRef.current;
+    } else {
+      leadInMsRef.current = 0;
+    }
+
     sessionStartRef.current = now;
-    waveformRef.current = [];
-    waveformBucketIndexRef.current = -1;
-    waveformBucketMaxRef.current = 0;
     onRecordingStartRef.current?.();
   }
 
@@ -630,7 +681,7 @@ export default function SyncRecorder({
 
         // See the comment on countInBeats for why these can't go through a
         // prop/state flip instead.
-        maybeStartAudioPipeline(beat);
+        maybeStartAudioPipeline(beat, now);
         maybeStartTrackedSession(beat, now);
       },
     );
@@ -683,8 +734,9 @@ export default function SyncRecorder({
       // Fallback: the count-in already elapsed while setup was still
       // pending (very fast tempo, or a slow permission prompt) — catch up
       // now instead of silently missing the lead-in and/or the session.
-      maybeStartAudioPipeline(lastBeatRef.current);
-      maybeStartTrackedSession(lastBeatRef.current, Date.now());
+      const fallbackNow = Date.now();
+      maybeStartAudioPipeline(lastBeatRef.current, fallbackNow);
+      maybeStartTrackedSession(lastBeatRef.current, fallbackNow);
     })();
 
     return () => {
@@ -730,6 +782,7 @@ export default function SyncRecorder({
           tripletTargetRef.current,
           toleranceRef.current,
           maxBarsRef.current,
+          leadInMsRef.current,
         );
 
         onSessionEndRef.current?.({
@@ -742,9 +795,12 @@ export default function SyncRecorder({
           tripletTarget: tripletTargetRef.current,
           waveform: waveformRef.current,
           maxBars: maxBarsRef.current,
+          leadInMs: leadInMsRef.current,
         });
         sessionStartRef.current = null;
         waveformRef.current = [];
+        waveformStartRef.current = null;
+        leadInMsRef.current = 0;
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

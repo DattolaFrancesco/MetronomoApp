@@ -196,4 +196,29 @@ describe("analyzeSession — end-to-end regression for the decay-tail bug", () =
     expect(beat1Event!.deltaMs).toBeCloseTo(50, 0);
     expect(beat1Event!.status).toBe("onTime");
   });
+
+  test("leadInMs: a hit played slightly before the first beat is still captured, as a negative delta", () => {
+    // leadInMs=100 means bucket index 0 is true time -100ms, so bucket i is
+    // true time (i*50 - 100). A hit peaking at bucket 1 (true time -50ms) —
+    // i.e. played 50ms *before* the nominal first beat — should still be
+    // found and reported relative to the true first beat (elapsedMs 0),
+    // not silently missed just because it happened "early".
+    const waveform = [0.05, 0.8, 0.3, 0.1, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05];
+    const { events } = analyzeSession(
+      waveform,
+      400,
+      120,
+      "quarter",
+      2,
+      90,
+      1,
+      100, // leadInMs
+    );
+    const beat0Event = events.find((e) => e.beatIndex === 0);
+
+    expect(beat0Event).toBeDefined();
+    expect(beat0Event!.elapsedMs).toBe(0); // still relative to the true first beat
+    expect(beat0Event!.deltaMs).toBeCloseTo(-50, 0);
+    expect(beat0Event!.status).toBe("onTime");
+  });
 });

@@ -91,6 +91,11 @@ export type SessionSummary = {
   // everything down) and would otherwise draw a spurious, mostly-empty
   // extra row. Undefined only if the session had no fixed bar limit.
   maxBars: number | undefined;
+  // How much earlier than elapsedMs=0 (the first quarter) the waveform
+  // array actually starts — see analyzeSession's leadInMs parameter. Also
+  // used by the debug chart to know how far back real pre-roll data
+  // extends before the first bar.
+  leadInMs: number;
 };
 
 // ---- Constants ----
@@ -403,6 +408,15 @@ export function extendClickGate(
 // findOnsetPeaks/pickPeakInRange) — not simply the tallest bucket, which a
 // previous hit's still-decaying tail could otherwise win if it hadn't
 // faded below MIN_PEAK_AMPLITUDE yet by the time this window opened.
+//
+// `leadInMs` is how much earlier than elapsedMs=0 (the first quarter) the
+// waveform array actually starts recording — a deliberate pre-roll margin
+// so a hit played slightly before the first beat still gets captured
+// instead of falling outside every search window. Bucket index 0
+// corresponds to true time `-leadInMs`, so every lookup into `waveform`
+// shifts a target time by `+leadInMs` to land on the right bucket; the
+// resulting `elapsedMs`/`deltaMs` on each event are converted back to
+// being relative to the true first beat, same as when leadInMs is 0.
 export function analyzeSession(
   waveform: number[],
   durationMs: number,
@@ -411,6 +425,7 @@ export function analyzeSession(
   tripletTarget: TripletTarget,
   toleranceMs: number,
   maxBars: number | undefined,
+  leadInMs = 0,
 ): { events: OnsetEvent[]; rejectedPeaks: RejectedPeak[] } {
   const events: OnsetEvent[] = [];
   const rejectedPeaks: RejectedPeak[] = [];
@@ -470,13 +485,16 @@ export function analyzeSession(
 
   for (const hit of expectedHits) {
     const targetTime = hit.time;
+    // Waveform-space time: bucket index 0 is `-leadInMs` in true (elapsedMs)
+    // time, so every true target time needs +leadInMs to find its bucket.
+    const targetTimeInWaveform = targetTime + leadInMs;
     const firstBucket = Math.max(
       0,
-      Math.floor((targetTime - matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
+      Math.floor((targetTimeInWaveform - matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
     );
     const lastBucket = Math.min(
       waveform.length - 1,
-      Math.ceil((targetTime + matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
+      Math.ceil((targetTimeInWaveform + matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
     );
 
     const bestBucket = pickPeakInRange(
@@ -490,7 +508,9 @@ export function analyzeSession(
     if (bestBucket === null) continue;
     claimedBuckets.add(bestBucket);
 
-    const peakTime = bestBucket * WAVEFORM_SAMPLE_INTERVAL_MS;
+    // Converted back out of waveform-space so deltaMs/elapsedMs stay
+    // relative to the true first beat regardless of leadInMs.
+    const peakTime = bestBucket * WAVEFORM_SAMPLE_INTERVAL_MS - leadInMs;
     const delta = peakTime - targetTime;
     const status = classifyOnset(delta, toleranceMs);
     events.push({
