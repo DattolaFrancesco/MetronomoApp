@@ -1,5 +1,6 @@
 import {
   BEATS_PER_BAR,
+  currentWindowHalfMs,
   WAVEFORM_SAMPLE_INTERVAL_MS,
   type OnsetStatus,
   type SessionSummary,
@@ -80,7 +81,6 @@ export default function DebugChart({ summary }: DebugChartProps) {
       return [] as BarRow[];
     }
 
-    const pxPerMs = width / barDurationMs;
     const baseline = TOP_LABEL_LANE + CHART_HEIGHT;
     // Exactly the number of bars chosen on the setup screen when known —
     // durationMs always overshoots it a bit (recording continues briefly
@@ -89,27 +89,48 @@ export default function DebugChart({ summary }: DebugChartProps) {
     const totalBars =
       summary.maxBars ?? Math.max(1, Math.ceil(totalMs / barDurationMs));
 
+    // How much real audio to show before the very first quarter and after
+    // the very last one — same margin the recorder actually captures (see
+    // leadInMs on SyncRecorder/SessionSummary) for the "before", and the
+    // same tempo-adaptive window size used everywhere else for the
+    // "after" (the recorder always keeps at least a full beat of tail
+    // audio past the last beat before stopping, comfortably more than this).
+    const leadInMs = summary.leadInMs ?? 0;
+    const postRollMs = currentWindowHalfMs(beatIntervalMs);
+
     const result: BarRow[] = [];
     for (let bar = 0; bar < totalBars; bar++) {
-      const barStart = bar * barDurationMs;
-      const barEnd = barStart + barDurationMs;
+      const isFirst = bar === 0;
+      const isLast = bar === totalBars - 1;
+      const nominalStart = bar * barDurationMs;
+      const nominalEnd = nominalStart + barDurationMs;
+      // Only the first/last row's outer edge gets padded — bars in between
+      // butt up against each other exactly as before.
+      const barStart = isFirst ? nominalStart - leadInMs : nominalStart;
+      const barEnd = isLast ? nominalEnd + postRollMs : nominalEnd;
+      // Per-row scale so a padded first/last row's wider true-time span
+      // still fits exactly into the same pixel width as every other row.
+      const rowPxPerMs = width / (barEnd - barStart);
 
       // Waveform: straight segments between consecutive bucket points
       // (no curve smoothing) so every peak reads as a distinct triangle
       // instead of a rounded hill — same amplitude data as the live
-      // "Input audio" view, just a filled silhouette here.
+      // "Input audio" view, just a filled silhouette here. Bucket time is
+      // waveform-relative (index 0 = true time -leadInMs), so bar-relative
+      // true time needs +leadInMs to land on the right bucket.
       const waveformPath = Skia.Path.Make();
       if (summary.waveform.length > 0) {
         const firstBucket = Math.max(
           0,
-          Math.floor(barStart / WAVEFORM_SAMPLE_INTERVAL_MS) - 1,
+          Math.floor((barStart + leadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS) - 1,
         );
         const lastBucket = Math.min(
           summary.waveform.length - 1,
-          Math.ceil(barEnd / WAVEFORM_SAMPLE_INTERVAL_MS) + 1,
+          Math.ceil((barEnd + leadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS) + 1,
         );
         for (let b = firstBucket; b <= lastBucket; b++) {
-          const x = (b * WAVEFORM_SAMPLE_INTERVAL_MS - barStart) * pxPerMs;
+          const trueTime = b * WAVEFORM_SAMPLE_INTERVAL_MS - leadInMs;
+          const x = (trueTime - barStart) * rowPxPerMs;
           const y = baseline - Math.max(1, summary.waveform[b] * CHART_HEIGHT);
           if (b === firstBucket) {
             waveformPath.moveTo(x, baseline);
@@ -119,7 +140,8 @@ export default function DebugChart({ summary }: DebugChartProps) {
           }
         }
         if (lastBucket >= firstBucket) {
-          const lastX = (lastBucket * WAVEFORM_SAMPLE_INTERVAL_MS - barStart) * pxPerMs;
+          const lastTrueTime = lastBucket * WAVEFORM_SAMPLE_INTERVAL_MS - leadInMs;
+          const lastX = (lastTrueTime - barStart) * rowPxPerMs;
           waveformPath.lineTo(lastX, baseline);
           waveformPath.close();
         }
@@ -131,8 +153,8 @@ export default function DebugChart({ summary }: DebugChartProps) {
       const quarterLabels: { x: number; label: string }[] = [];
 
       for (let q = 0; q < BEATS_PER_BAR; q++) {
-        const quarterTime = q * beatIntervalMs;
-        const x = quarterTime * pxPerMs;
+        const quarterTime = nominalStart + q * beatIntervalMs;
+        const x = (quarterTime - barStart) * rowPxPerMs;
 
         quarterTickPath.moveTo(x, TOP_LABEL_LANE);
         quarterTickPath.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
@@ -144,7 +166,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
         // dashes, independent of the session's own subdivision, purely as
         // a finer visual ruler between the numbered quarters.
         for (let s = 1; s < 4; s++) {
-          const subX = (quarterTime + (s * beatIntervalMs) / 4) * pxPerMs;
+          const subX = (quarterTime + (s * beatIntervalMs) / 4 - barStart) * rowPxPerMs;
           sixteenthTickPath.moveTo(subX, TOP_LABEL_LANE);
           sixteenthTickPath.lineTo(
             subX,
@@ -152,15 +174,18 @@ export default function DebugChart({ summary }: DebugChartProps) {
           );
         }
       }
-      barlinePath.moveTo(0, 0);
-      barlinePath.lineTo(0, TOP_LABEL_LANE + CHART_HEIGHT);
+      // Marks the true start of this bar — inset from the row's left edge
+      // on the first row, where the extra pre-roll margin sits to its left.
+      const barlineX = (nominalStart - barStart) * rowPxPerMs;
+      barlinePath.moveTo(barlineX, 0);
+      barlinePath.lineTo(barlineX, TOP_LABEL_LANE + CHART_HEIGHT);
 
       const onsetPath = Skia.Path.Make();
       for (const event of summary.events) {
         if (event.status !== "onTime") continue;
         const t = event.elapsedMs + event.deltaMs;
         if (t < barStart || t >= barEnd) continue;
-        const x = (t - barStart) * pxPerMs;
+        const x = (t - barStart) * rowPxPerMs;
         onsetPath.moveTo(x, TOP_LABEL_LANE);
         onsetPath.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
       }
@@ -184,6 +209,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
     summary.waveform,
     summary.events,
     summary.maxBars,
+    summary.leadInMs,
   ]);
 
   return (
