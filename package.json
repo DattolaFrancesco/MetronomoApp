@@ -25,6 +25,7 @@
     "expo-haptics": "~57.0.1",
     "expo-image": "~57.0.1",
     "expo-keep-awake": "~57.0.1",
+    "expo-linear-gradient": "~57.0.1",
     "expo-linking": "~57.0.3",
     "expo-precision-metronome": "^1.2.0",
     "expo-router": "~57.0.7",

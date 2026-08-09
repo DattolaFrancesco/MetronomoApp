@@ -9,6 +9,7 @@ import SyncRecorder, {
   type TripletTarget,
 } from "@/components/sync-recorder";
 import { useKeepAwake } from "expo-keep-awake";
+import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
   BPM_MAX,
   BPM_MIN,
@@ -302,9 +303,16 @@ export default function Home() {
 
   if (showSetup) {
     return (
-      <View
-        className="flex-1 bg-black px-5 justify-center"
-        style={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }}
+      <LinearGradient
+        colors={["#1E6F63", "#0D3C38", "#071615"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{
+          flex: 1,
+          paddingHorizontal: 20,
+          paddingTop: insets.top + 16,
+          paddingBottom: insets.bottom + 24,
+        }}
       >
         <SessionSetup
           bars={setupBars}
@@ -313,7 +321,7 @@ export default function Home() {
           onSubdivisionChange={setSetupSubdivision}
           onStart={handleSetupStart}
         />
-      </View>
+      </LinearGradient>
     );
   }
 
