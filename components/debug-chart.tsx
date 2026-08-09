@@ -2,7 +2,6 @@ import {
   BEATS_PER_BAR,
   currentWindowHalfMs,
   WAVEFORM_SAMPLE_INTERVAL_MS,
-  type OnsetStatus,
   type SessionSummary,
 } from "@/components/sync-recorder";
 import { Canvas, Path, Skia, type SkPath } from "@shopify/react-native-skia";
@@ -15,7 +14,7 @@ import { Text, View } from "react-native";
 // never having to scroll sideways to compare beats. Each row draws the mic
 // level as a jagged (straight-segment, not curve-smoothed) filled shape so
 // peaks read as sharp triangles, the fixed quarter/sixteenth grid, and one
-// line per accepted onset (green). Numeric labels stay plain RN Text,
+// line per accepted onset (red). Numeric labels stay plain RN Text,
 // absolutely positioned over each row's canvas — Skia text needs a loaded
 // font, which buys nothing over RN's own text layout for a handful of
 // small numbers.
@@ -34,17 +33,13 @@ const SIXTEENTH_TICK_HEIGHT_RATIO = 0.4;
 const BARLINE_COLOR = "rgba(255,255,255,0.7)";
 const QUARTER_TICK_COLOR = "rgba(255,255,255,0.55)";
 const SIXTEENTH_TICK_COLOR = "rgba(255,255,255,0.16)";
-const WAVEFORM_FILL_COLOR = "rgba(57,255,106,0.35)";
+const WAVEFORM_FILL_COLOR = "rgba(255,138,128,0.35)";
 
-// Onset line color follows the same on-time/early/late classification
-// already computed in sync-recorder.tsx (OnsetEvent.status, against
-// toleranceMs) — early and late are both just "not on time" here, one red,
-// no need to tell them apart by color in this view.
-const ONSET_STATUS_COLOR: Record<OnsetStatus, string> = {
-  onTime: "#39FF6A",
-  early: "#FF453A",
-  late: "#FF453A",
-};
+// One line per accepted onset, on-time or not — the chips/stat counts in
+// session-report.tsx already carry the accuracy color-coding; this chart's
+// job is just to show *where* each real hit landed against the grid, so
+// every event gets the same accent color regardless of status.
+const ONSET_LINE_COLOR = "#FF3B30";
 
 type BarRow = {
   barNumber: number;
@@ -182,7 +177,6 @@ export default function DebugChart({ summary }: DebugChartProps) {
 
       const onsetPath = Skia.Path.Make();
       for (const event of summary.events) {
-        if (event.status !== "onTime") continue;
         const t = event.elapsedMs + event.deltaMs;
         if (t < barStart || t >= barEnd) continue;
         const x = (t - barStart) * rowPxPerMs;
@@ -215,21 +209,19 @@ export default function DebugChart({ summary }: DebugChartProps) {
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        Una riga per battuta. Le righe bianche numerate segnano i quarti, le
-        lineette più corte i sedicesimi. Per ogni colpo a tempo, una linea
-        verde segna il timestamp reale del picco rilevato dal microfono.
+        Le righe bianche numerate segnano i quarti, le lineette corte i
+        sedicesimi. La linea rossa piena è il picco rilevato dal microfono.
       </Text>
 
       <View className="flex-row flex-wrap gap-x-3 gap-y-1">
-        <LegendLine color={WAVEFORM_FILL_COLOR} label="livello microfono" />
         <LegendLine color={QUARTER_TICK_COLOR} label="quarto" />
-        <LegendLine color={ONSET_STATUS_COLOR.onTime} label="colpo a tempo" />
+        <LegendLine color={ONSET_LINE_COLOR} label="colpo" />
       </View>
 
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
         {rows.map((row) => (
           <View key={row.barNumber} style={{ marginBottom: ROW_GAP }}>
-            <Text className="text-white/50 text-[10px] font-bold uppercase tracking-widest mb-1">
+            <Text className="text-white text-[10px] font-bold uppercase tracking-widest mb-1">
               Battuta {row.barNumber}
             </Text>
             <View style={{ width, height: CHART_TOTAL_HEIGHT }}>
@@ -238,7 +230,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
                 <Path path={row.sixteenthTickPath} color={SIXTEENTH_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.quarterTickPath} color={QUARTER_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.barlinePath} color={BARLINE_COLOR} style="stroke" strokeWidth={2} />
-                <Path path={row.onsetPath} color={ONSET_STATUS_COLOR.onTime} style="stroke" strokeWidth={2} />
+                <Path path={row.onsetPath} color={ONSET_LINE_COLOR} style="stroke" strokeWidth={2} />
               </Canvas>
 
               {/* Numeric labels only — the lines/waveform themselves are

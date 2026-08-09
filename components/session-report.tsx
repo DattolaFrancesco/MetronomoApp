@@ -6,17 +6,27 @@ import type {
   SessionSummary,
   Subdivision,
 } from "@/components/sync-recorder";
+import { LinearGradient } from "expo-linear-gradient";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const STATUS_META: Record<
-  OnsetStatus,
-  { label: string; color: string; bg: string }
-> = {
-  onTime: { label: "A TEMPO", color: "#39FF6A", bg: "rgba(57,255,106,0.12)" },
-  early: { label: "ANTICIPO", color: "#FF9F0A", bg: "rgba(255,159,10,0.12)" },
-  late: { label: "RITARDO", color: "#FF453A", bg: "rgba(255,69,58,0.12)" },
+const ACCENT_COLOR = "#FF3B30";
+const DIM_COLOR = "rgba(255,255,255,0.35)";
+
+const STATUS_META: Record<OnsetStatus, { label: string }> = {
+  onTime: { label: "A TEMPO" },
+  early: { label: "ANTICIPO" },
+  late: { label: "RITARDO" },
 };
+
+// A zero count is de-emphasized (dim grey) regardless of category; a
+// nonzero count is white for onTime, red for early/late — early and late
+// aren't told apart by color here, same simplification already used for
+// the debug chart's onset lines and the event chips below.
+function countColor(count: number, isOnTime: boolean) {
+  if (count === 0) return DIM_COLOR;
+  return isOnTime ? "#FFFFFF" : ACCENT_COLOR;
+}
 
 // Same "beat-subdivision" scheme already used in the debug chart's grid
 // labels: plain beat number for quarters, a fixed "-5" suffix for the
@@ -59,16 +69,16 @@ function EventChip({
   event: OnsetEvent;
   subdivision: Subdivision;
 }) {
-  const meta = STATUS_META[event.status];
+  const color = event.status === "onTime" ? "#FFFFFF" : ACCENT_COLOR;
   return (
     <View
       className="items-center rounded-xl px-2.5 py-1.5 gap-0.5"
-      style={{ backgroundColor: meta.bg, borderWidth: 1, borderColor: `${meta.color}55` }}
+      style={{ borderWidth: 1, borderColor: color }}
     >
-      <Text className="text-xs font-bold" style={{ color: meta.color }}>
+      <Text className="text-xs font-bold" style={{ color }}>
         {eventLabel(event, subdivision)}
       </Text>
-      <Text className="text-[9px] font-semibold" style={{ color: meta.color }}>
+      <Text className="text-[9px] font-semibold" style={{ color }}>
         {event.deltaMs > 0 ? "+" : ""}
         {Math.round(event.deltaMs)}ms
       </Text>
@@ -95,17 +105,14 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
   const earlyCount = sortedEvents.filter((e) => e.status === "early").length;
   const lateCount = sortedEvents.filter((e) => e.status === "late").length;
   const accuracy = total > 0 ? Math.round((onTimeCount / total) * 100) : null;
-  const accuracyColor =
-    accuracy === null
-      ? "#8E8E93"
-      : accuracy >= 80
-        ? "#39FF6A"
-        : accuracy >= 50
-          ? "#FF9F0A"
-          : "#FF453A";
 
   return (
-    <View className="flex-1 bg-black">
+    <LinearGradient
+      colors={["#242426", "#1C1C1E", "#141416"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      style={{ flex: 1 }}
+    >
       <Pressable
         onPress={onNewSession}
         className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
@@ -113,7 +120,9 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
           top: insets.top + 12,
           left: 16,
           zIndex: 10,
-          backgroundColor: "rgba(255,255,255,0.08)",
+          backgroundColor: "rgba(255,255,255,0.06)",
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.12)",
         }}
       >
         <Text className="text-white text-lg">←</Text>
@@ -125,12 +134,17 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
           paddingHorizontal: 24,
           paddingTop: insets.top + 24,
           paddingBottom: insets.bottom + 40,
-          gap: 24,
+          gap: 20,
         }}
       >
-        <Text className="text-center text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+        <Text
+          className="text-center text-lg font-extrabold uppercase tracking-[3px]"
+          style={{ color: ACCENT_COLOR }}
+        >
           Report sessione
         </Text>
+
+        <View style={{ height: 1, backgroundColor: "rgba(255,255,255,0.12)" }} />
 
         <DarkPanel className="px-4 py-5 gap-4 w-full items-center">
           <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
@@ -143,17 +157,37 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
             </Text>
           ) : (
             <>
-              <Text className="text-6xl font-bold" style={{ color: accuracyColor }}>
+              <Text
+                className="text-6xl font-bold"
+                style={{
+                  color: ACCENT_COLOR,
+                  textShadowColor: "rgba(255,59,48,0.55)",
+                  textShadowRadius: 20,
+                  textShadowOffset: { width: 0, height: 0 },
+                }}
+              >
                 {accuracy}%
               </Text>
-              <Text className="text-neutral-500 text-xs font-semibold">
+              <Text className="text-white/60 text-xs font-semibold">
                 {onTimeCount} su {total} colpi a tempo
               </Text>
 
               <View className="flex-row justify-center gap-8 mt-1">
-                <StatCount color={STATUS_META.onTime.color} label="A TEMPO" count={onTimeCount} />
-                <StatCount color={STATUS_META.early.color} label="ANTICIPO" count={earlyCount} />
-                <StatCount color={STATUS_META.late.color} label="RITARDO" count={lateCount} />
+                <StatCount
+                  color={countColor(onTimeCount, true)}
+                  label={STATUS_META.onTime.label}
+                  count={onTimeCount}
+                />
+                <StatCount
+                  color={countColor(earlyCount, false)}
+                  label={STATUS_META.early.label}
+                  count={earlyCount}
+                />
+                <StatCount
+                  color={countColor(lateCount, false)}
+                  label={STATUS_META.late.label}
+                  count={lateCount}
+                />
               </View>
 
               <View className="flex-row flex-wrap justify-center gap-2 mt-2">
@@ -166,7 +200,10 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
         </DarkPanel>
 
         <DarkPanel className="px-4 py-4 gap-3 w-full">
-          <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+          <Text
+            className="text-[11px] font-bold uppercase tracking-[2px]"
+            style={{ color: ACCENT_COLOR }}
+          >
             Debug / Dati tecnici
           </Text>
           <DebugChart summary={summary} />
@@ -174,12 +211,28 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
 
         <Pressable
           onPress={onNewSession}
-          className="self-center px-16 py-5 rounded-full active:opacity-80"
-          style={{ backgroundColor: "#39FF6A" }}
+          className="self-stretch py-5 rounded-2xl items-center active:opacity-70 border-2"
+          style={{
+            borderColor: ACCENT_COLOR,
+            shadowColor: ACCENT_COLOR,
+            shadowOpacity: 0.5,
+            shadowRadius: 14,
+            shadowOffset: { width: 0, height: 0 },
+          }}
         >
-          <Text className="text-black text-xl font-bold">Nuova sessione</Text>
+          <Text
+            className="text-xl font-extrabold uppercase tracking-widest"
+            style={{
+              color: ACCENT_COLOR,
+              textShadowColor: "rgba(255,59,48,0.6)",
+              textShadowRadius: 12,
+              textShadowOffset: { width: 0, height: 0 },
+            }}
+          >
+            Nuova sessione
+          </Text>
         </Pressable>
       </ScrollView>
-    </View>
+    </LinearGradient>
   );
 }
