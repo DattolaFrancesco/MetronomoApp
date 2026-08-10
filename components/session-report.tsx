@@ -1,5 +1,6 @@
 import DarkPanel from "@/components/dark-panel";
 import DebugChart from "@/components/debug-chart";
+import DebugHitTable from "@/components/debug-hit-table";
 import type {
   OnsetEvent,
   OnsetStatus,
@@ -207,6 +208,8 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
             Debug / Dati tecnici
           </Text>
           <DebugChart summary={summary} />
+          <View style={{ height: 1, backgroundColor: "rgba(255,255,255,0.08)" }} />
+          <DebugHitTable summary={summary} />
         </DarkPanel>
 
         <Pressable

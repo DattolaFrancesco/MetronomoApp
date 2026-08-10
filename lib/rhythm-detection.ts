@@ -62,11 +62,37 @@ export type RejectedPeak = {
   deltaMs: number;
 };
 
+// Per-expected-hit diagnostic snapshot — one entry per point analyzeSession
+// actually searched for (every quarter, or every evaluated sub-beat for
+// eighth/triplet/sixteenth), whether or not it ended up an accepted
+// OnsetEvent. Debug-only: lets the debug screen show *why* a given quarter
+// has no red onset line, instead of just its absence. candidateAmplitude/
+// candidateRise describe the single loudest raw bucket found in that hit's
+// search window (excluding buckets already claimed by a neighboring hit) —
+// regardless of whether that bucket actually cleared either threshold — so
+// a miss can be told apart as "too quiet" vs "no real rise" vs "nothing
+// there at all" (candidateAmplitude null).
+export type HitDiagnostic = {
+  beatIndex: number;
+  subBeatIndex: number;
+  expectedTimeMs: number;
+  matched: boolean;
+  deltaMs: number | null;
+  status: OnsetStatus | null;
+  candidateAmplitude: number | null;
+  candidateRise: number | null;
+  passedAmplitude: boolean;
+  passedRise: boolean;
+};
+
 export type SessionSummary = {
   events: OnsetEvent[];
   // Every candidate peak that had a beat's capture window open but didn't
   // end up accepted — debug-chart only. See RejectedPeak/PeakRejectReason.
   rejectedPeaks: RejectedPeak[];
+  // One diagnostic snapshot per expected hit, matched or not — see
+  // HitDiagnostic.
+  hitDiagnostics: HitDiagnostic[];
   durationMs: number;
   toleranceMs: number;
   // BPM the session was recorded at — debug-chart only, needed to redraw
@@ -135,7 +161,7 @@ export const MIN_PEAK_AMPLITUDE = 0.3;
 // the way up instead of the actual peak. Raise this if decaying tails
 // still get picked; lower it if real (especially soft or
 // gradually-attacked) hits start getting missed entirely.
-export const MIN_ONSET_RISE = 0.12;
+export const MIN_ONSET_RISE = 0.08;
 
 // Decimated (bucket-max) amplitude history kept for the full-session
 // waveform shown later in the report — far coarser than the live poll rate
@@ -292,18 +318,26 @@ export function computeExpectedHits(
 
 // ---- Onset/peak selection ----
 
-// Marks every bucket that's a genuine attack peak: a local maximum (no
-// louder than either neighbor) reached by a rise of at least minOnsetRise
-// from the closest preceding trough. Runs once over the whole waveform,
-// independent of any single beat's search window, so a trough that sits
-// just outside a window still counts — that's usually exactly where a
-// decaying previous hit bottoms out before the next one begins. See
-// MIN_ONSET_RISE for why this is trough-to-peak, not step-to-step.
-export function findOnsetPeaks(
+// Marks every bucket that's a genuine attack peak: reached by a rise of at
+// least minOnsetRise from the closest preceding trough. Not required to be a
+// local maximum — a bucket that's quieter than a neighboring bucket still
+// counts, as long as it cleared the rise from its own trough. Runs once over
+// the whole waveform, independent of any single beat's search window, so a
+// trough that sits just outside a window still counts — that's usually
+// exactly where a decaying previous hit bottoms out before the next one
+// begins. See MIN_ONSET_RISE for why this is trough-to-peak, not
+// step-to-step.
+// Same trough-tracking pass as findOnsetPeaks, but returns the actual
+// trough-to-peak rise at every bucket (0 where the bucket was still falling
+// or is the running trough itself) instead of collapsing it to a boolean.
+// Lets debug/diagnostic code show *how close* a candidate got to
+// minOnsetRise, not just whether it cleared it — findOnsetPeaks is a thin
+// wrapper around this for callers that only need the boolean.
+export function computeOnsetRise(
   waveform: number[],
   minOnsetRise: number = MIN_ONSET_RISE,
-): boolean[] {
-  const isPeak = new Array(waveform.length).fill(false);
+): number[] {
+  const rise = new Array(waveform.length).fill(0);
   let trough = waveform.length > 0 ? waveform[0] : 0;
   for (let b = 1; b < waveform.length - 1; b++) {
     const amp = waveform[b];
@@ -311,16 +345,24 @@ export function findOnsetPeaks(
       trough = amp;
       continue;
     }
-    const isLocalMax = amp >= waveform[b - 1] && amp >= waveform[b + 1];
-    if (isLocalMax && amp - trough >= minOnsetRise) {
-      isPeak[b] = true;
+    rise[b] = amp - trough;
+    if (rise[b] >= minOnsetRise) {
       // Start tracking the next trough fresh from here, so a slow decay
       // right after this peak doesn't get compared all the way back to the
       // old (deeper) trough for the *next* candidate peak.
       trough = amp;
     }
   }
-  return isPeak;
+  return rise;
+}
+
+export function findOnsetPeaks(
+  waveform: number[],
+  minOnsetRise: number = MIN_ONSET_RISE,
+): boolean[] {
+  return computeOnsetRise(waveform, minOnsetRise).map(
+    (rise) => rise >= minOnsetRise,
+  );
 }
 
 // Picks the loudest bucket in [firstIndex, lastIndex] that both clears
@@ -426,9 +468,14 @@ export function analyzeSession(
   toleranceMs: number,
   maxBars: number | undefined,
   leadInMs = 0,
-): { events: OnsetEvent[]; rejectedPeaks: RejectedPeak[] } {
+): {
+  events: OnsetEvent[];
+  rejectedPeaks: RejectedPeak[];
+  hitDiagnostics: HitDiagnostic[];
+} {
   const events: OnsetEvent[] = [];
   const rejectedPeaks: RejectedPeak[] = [];
+  const hitDiagnostics: HitDiagnostic[] = [];
 
   const beatIntervalMs = 60000 / bpm;
   if (
@@ -436,10 +483,11 @@ export function analyzeSession(
     beatIntervalMs <= 0 ||
     waveform.length === 0
   ) {
-    return { events, rejectedPeaks };
+    return { events, rejectedPeaks, hitDiagnostics };
   }
 
-  const onsetPeaks = findOnsetPeaks(waveform);
+  const riseByBucket = computeOnsetRise(waveform);
+  const onsetPeaks = riseByBucket.map((rise) => rise >= MIN_ONSET_RISE);
 
   const steps = SUBDIVISION_STEPS[subdivision];
   const subIntervalMs = beatIntervalMs / steps;
@@ -490,12 +538,39 @@ export function analyzeSession(
     const targetTimeInWaveform = targetTime + leadInMs;
     const firstBucket = Math.max(
       0,
-      Math.floor((targetTimeInWaveform - matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
+      Math.floor(
+        (targetTimeInWaveform - matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS,
+      ),
     );
     const lastBucket = Math.min(
       waveform.length - 1,
-      Math.ceil((targetTimeInWaveform + matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS),
+      Math.ceil(
+        (targetTimeInWaveform + matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS,
+      ),
     );
+
+    // Diagnostic candidates — computed before this hit's own pick is added
+    // to claimedBuckets below, so they only ever exclude buckets a
+    // *different* hit already claimed. Tracked as two independent bests,
+    // not one bucket's two numbers: the loudest bucket in the window is
+    // often still on a previous hit's decaying tail (still going down, so
+    // its own rise is 0), while the actual rising attack nearby can be
+    // quieter and land on a different bucket entirely. Reporting only the
+    // loudest bucket's rise would then misleadingly show 0 even when a real
+    // (if too-quiet-to-win-the-loudness-contest) rise happened right there.
+    let diagAmp: number | null = null;
+    let bestRise: number | null = null;
+    for (let b = firstBucket; b <= lastBucket; b++) {
+      if (claimedBuckets.has(b)) continue;
+      const amp = waveform[b];
+      if (diagAmp === null || amp > diagAmp) {
+        diagAmp = amp;
+      }
+      const rise = riseByBucket[b];
+      if (bestRise === null || rise > bestRise) {
+        bestRise = rise;
+      }
+    }
 
     const bestBucket = pickPeakInRange(
       waveform,
@@ -505,24 +580,41 @@ export function analyzeSession(
       MIN_PEAK_AMPLITUDE,
       claimedBuckets,
     );
-    if (bestBucket === null) continue;
-    claimedBuckets.add(bestBucket);
 
-    // Converted back out of waveform-space so deltaMs/elapsedMs stay
-    // relative to the true first beat regardless of leadInMs.
-    const peakTime = bestBucket * WAVEFORM_SAMPLE_INTERVAL_MS - leadInMs;
-    const delta = peakTime - targetTime;
-    const status = classifyOnset(delta, toleranceMs);
-    events.push({
-      id: eventId++,
-      elapsedMs: targetTime,
-      deltaMs: delta,
-      status,
+    let deltaMs: number | null = null;
+    let status: OnsetStatus | null = null;
+    if (bestBucket !== null) {
+      claimedBuckets.add(bestBucket);
+
+      // Converted back out of waveform-space so deltaMs/elapsedMs stay
+      // relative to the true first beat regardless of leadInMs.
+      const peakTime = bestBucket * WAVEFORM_SAMPLE_INTERVAL_MS - leadInMs;
+      deltaMs = peakTime - targetTime;
+      status = classifyOnset(deltaMs, toleranceMs);
+      events.push({
+        id: eventId++,
+        elapsedMs: targetTime,
+        deltaMs,
+        status,
+        beatIndex: hit.beatIndex,
+        subBeatIndex: hit.subBeatIndex,
+        amplitude: waveform[bestBucket],
+      });
+    }
+
+    hitDiagnostics.push({
       beatIndex: hit.beatIndex,
       subBeatIndex: hit.subBeatIndex,
-      amplitude: waveform[bestBucket],
+      expectedTimeMs: targetTime,
+      matched: bestBucket !== null,
+      deltaMs,
+      status,
+      candidateAmplitude: diagAmp,
+      candidateRise: bestRise,
+      passedAmplitude: diagAmp !== null && diagAmp >= MIN_PEAK_AMPLITUDE,
+      passedRise: bestRise !== null && bestRise >= MIN_ONSET_RISE,
     });
   }
 
-  return { events, rejectedPeaks };
+  return { events, rejectedPeaks, hitDiagnostics };
 }

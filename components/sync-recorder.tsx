@@ -13,10 +13,12 @@ import {
   evaluatedSubBeats,
   extendClickGate,
   isWithinClickGate,
+  MIN_ONSET_RISE,
   MIN_PEAK_AMPLITUDE,
   primarySubBeat,
   SUBDIVISION_STEPS,
   WAVEFORM_SAMPLE_INTERVAL_MS,
+  type HitDiagnostic,
   type OnsetEvent,
   type OnsetStatus,
   type PeakRejectReason,
@@ -55,11 +57,13 @@ export {
   CLICK_GATE_MS,
   currentWindowHalfMs,
   DEFAULT_TOLERANCE_MS,
+  MIN_ONSET_RISE,
   MIN_PEAK_AMPLITUDE,
   SUBDIVISION_STEPS,
   WAVEFORM_SAMPLE_INTERVAL_MS,
   evaluatedSubBeats,
   primarySubBeat,
+  type HitDiagnostic,
   type OnsetEvent,
   type OnsetStatus,
   type PeakRejectReason,
@@ -774,7 +778,7 @@ export default function SyncRecorder({
         }
 
         const durationMs = Date.now() - sessionStartRef.current;
-        const { events, rejectedPeaks } = analyzeSession(
+        const { events, rejectedPeaks, hitDiagnostics } = analyzeSession(
           waveformRef.current,
           durationMs,
           bpmRef.current,
@@ -788,6 +792,7 @@ export default function SyncRecorder({
         onSessionEndRef.current?.({
           events,
           rejectedPeaks,
+          hitDiagnostics,
           durationMs,
           toleranceMs: toleranceRef.current,
           bpm: bpmRef.current,
