@@ -212,6 +212,12 @@ function ChallengeSession({
   const [result, setResult] = useState<ChallengeResult | null>(null);
 
   const phaseRef = useRef<Phase>("idle");
+  // Guards handleStart/handleStop against a double-tap firing both before
+  // the first tap's setPhase has re-rendered the Pressable onto the other
+  // handler — without this, two rapid taps can both read the same "idle"
+  // (or same "recording") moment and issue two concurrent start()/stop()
+  // calls to the native engine.
+  const togglingRef = useRef(false);
 
   useKeepAwake();
 
@@ -242,16 +248,28 @@ function ChallengeSession({
   };
 
   const handleStart = async () => {
-    setResult(null);
-    setCountInBeat(null);
-    setPhase("countIn");
-    await start(bpm);
+    if (togglingRef.current) return;
+    togglingRef.current = true;
+    try {
+      setResult(null);
+      setCountInBeat(null);
+      setPhase("countIn");
+      await start(bpm);
+    } finally {
+      togglingRef.current = false;
+    }
   };
 
   const handleStop = async () => {
-    await stop();
-    setPhase("idle");
-    setCountInBeat(null);
+    if (togglingRef.current) return;
+    togglingRef.current = true;
+    try {
+      await stop();
+      setPhase("idle");
+      setCountInBeat(null);
+    } finally {
+      togglingRef.current = false;
+    }
   };
 
   const handleBack = async () => {
@@ -385,7 +403,7 @@ function ChallengeSession({
           </Text>
         </View>
 
-        <TempoRuler bpm={bpm} onChange={applyBpm} />
+        <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
 
         <Pressable
           onPress={phase !== "idle" ? handleStop : handleStart}
@@ -487,7 +505,7 @@ function ChallengeReport({
           </Text>
           <Text className="text-white/60 text-sm text-center">
             {result.passed
-              ? "All 8 hits were on time."
+              ? `All ${result.hits.length} hits were on time.`
               : "Not all hits were on time — try again!"}
           </Text>
           <Text className="text-white/40 text-xs font-semibold mt-1">

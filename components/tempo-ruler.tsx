@@ -121,9 +121,17 @@ function TempoTick({
 export default function TempoRuler({
   bpm,
   onChange,
+  disabled = false,
 }: {
   bpm: number;
   onChange: (bpm: number) => void;
+  // analyzeSession (lib/rhythm-detection.ts) reconstructs the whole
+  // session's expected beat times from a single final BPM at teardown, so
+  // changing tempo mid-recording would desync that reconstruction from the
+  // audio actually captured under the earlier tempo. Callers pass this
+  // while phase !== "idle", same gating already used for the tolerance
+  // slider and triplet/sixteenth target pickers.
+  disabled?: boolean;
 }) {
   const [width, setWidth] = useState(0);
 
@@ -211,7 +219,8 @@ export default function TempoRuler({
       if (!success) {
         isDragging.value = withTiming(0, { duration: 220 });
       }
-    });
+    })
+    .enabled(!disabled);
 
   // Enough ticks to cover the measured width plus one extra spacing unit
   // on each side, so wrapping (see TempoTick) never reveals a gap at the

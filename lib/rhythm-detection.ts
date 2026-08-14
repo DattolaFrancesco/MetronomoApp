@@ -353,7 +353,7 @@ export function computeOnsetRise(
 ): number[] {
   const rise = new Array(waveform.length).fill(0);
   let trough = waveform.length > 0 ? waveform[0] : 0;
-  for (let b = 1; b < waveform.length - 1; b++) {
+  for (let b = 1; b < waveform.length; b++) {
     const amp = waveform[b];
     if (amp < trough) {
       trough = amp;

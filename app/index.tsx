@@ -248,6 +248,18 @@ export default function Home() {
   const [toleranceMs, setToleranceMs] = useState(DEFAULT_TOLERANCE_MS);
 
   const phaseRef = useRef<Phase>("idle");
+  // Guards togglePlay against a double-tap firing twice before the first
+  // tap's setPhase has re-rendered — without this, two rapid taps can both
+  // read the same "idle" moment and issue two concurrent start() calls to
+  // the native engine.
+  const togglingRef = useRef(false);
+  // Set synchronously by handleBackToSetup right before it stops a session
+  // with hits already in it — otherwise SyncRecorder's teardown would still
+  // call handleSessionEnd with a non-empty summary, setReport would win the
+  // render race against showSetup (report is checked first), and the user
+  // would land on the report screen instead of setup despite explicitly
+  // tapping back.
+  const suppressReportRef = useRef(false);
   const insets = useSafeAreaInsets();
 
   useKeepAwake();
@@ -285,22 +297,28 @@ export default function Home() {
   }, []);
 
   const togglePlay = async () => {
-    if (phase !== "idle") {
-      await stop();
-      setPhase("idle");
-      setCountInBeat(null);
-      // Deliberately doesn't go back to setup here — if the session that
-      // just ended produced a report, `report` (checked before showSetup
-      // below) takes over the screen; if no audio was detected, staying on
-      // this recording screen keeps bars/subdivision/BPM as they are so the
-      // user can immediately retry instead of being bounced back to setup.
-    } else {
-      setReport(null);
-      setSyncStatus(null);
-      setSyncOffsetMs(null);
-      setCountInBeat(null);
-      setPhase("countIn");
-      await start(bpm);
+    if (togglingRef.current) return;
+    togglingRef.current = true;
+    try {
+      if (phase !== "idle") {
+        await stop();
+        setPhase("idle");
+        setCountInBeat(null);
+        // Deliberately doesn't go back to setup here — if the session that
+        // just ended produced a report, `report` (checked before showSetup
+        // below) takes over the screen; if no audio was detected, staying on
+        // this recording screen keeps bars/subdivision/BPM as they are so the
+        // user can immediately retry instead of being bounced back to setup.
+      } else {
+        setReport(null);
+        setSyncStatus(null);
+        setSyncOffsetMs(null);
+        setCountInBeat(null);
+        setPhase("countIn");
+        await start(bpm);
+      }
+    } finally {
+      togglingRef.current = false;
     }
   };
 
@@ -316,6 +334,7 @@ export default function Home() {
   // never leaves the engine or SyncRecorder armed underneath.
   const handleBackToSetup = async () => {
     if (phase !== "idle") {
+      suppressReportRef.current = true;
       await stop();
       setPhase("idle");
       setCountInBeat(null);
@@ -344,6 +363,10 @@ export default function Home() {
   };
 
   const handleSessionEnd = (summary: SessionSummary) => {
+    if (suppressReportRef.current) {
+      suppressReportRef.current = false;
+      return;
+    }
     if (summary.events.length > 0) {
       setReport(summary);
     }
@@ -556,7 +579,7 @@ export default function Home() {
           </Text>
         </View>
 
-        <TempoRuler bpm={bpm} onChange={applyBpm} />
+        <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
 
         <Pressable
           onPress={togglePlay}
