@@ -4,11 +4,16 @@ import { GlowDivider } from "@/components/session-setup";
 import SyncRecorder, { type SessionSummary } from "@/components/sync-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
 import {
+  getCompletedChallengeIds,
+  markChallengeCompleted,
+} from "@/lib/challenge-progress";
+import {
   CHALLENGE_TOLERANCE_MS,
   CHALLENGES,
-  scoreBattereLevareChallenge,
+  scoreChallenge,
   type Challenge,
   type ChallengeDifficulty,
+  type ChallengeId,
   type ChallengeResult,
 } from "@/lib/challenges";
 import { useKeepAwake } from "expo-keep-awake";
@@ -73,6 +78,23 @@ type ChallengeScreenProps = {
 
 export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
   const [activeChallenge, setActiveChallenge] = useState<Challenge | null>(null);
+  const [completedIds, setCompletedIds] = useState<Set<ChallengeId>>(new Set());
+
+  // Re-read on mount and every time we're back on the list (including
+  // right after finishing a session) — a fresh read from storage is the
+  // simplest way to pick up a challenge that was just marked completed,
+  // without needing a second "did it just pass" channel back up from
+  // ChallengeSession.
+  useEffect(() => {
+    if (activeChallenge) return;
+    let cancelled = false;
+    getCompletedChallengeIds().then((ids) => {
+      if (!cancelled) setCompletedIds(ids);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChallenge]);
 
   if (activeChallenge) {
     return (
@@ -83,15 +105,23 @@ export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
     );
   }
 
-  return <ChallengeList onSelect={setActiveChallenge} onBack={onBack} />;
+  return (
+    <ChallengeList
+      completedIds={completedIds}
+      onSelect={setActiveChallenge}
+      onBack={onBack}
+    />
+  );
 }
 
 // Scrollable list, ordered easiest to hardest (see CHALLENGES) — only one
 // real entry today, but laid out to hold more without changes.
 function ChallengeList({
+  completedIds,
   onSelect,
   onBack,
 }: {
+  completedIds: Set<ChallengeId>;
   onSelect: (challenge: Challenge) => void;
   onBack: () => void;
 }) {
@@ -145,9 +175,14 @@ function ChallengeList({
           >
             <DarkPanel className="px-4 py-4 gap-2">
               <View className="flex-row items-center justify-between">
-                <Text className="text-white text-base font-bold">
-                  {challenge.name}
-                </Text>
+                <View className="flex-row items-center gap-2 flex-1 pr-2">
+                  {completedIds.has(challenge.id) && (
+                    <Text style={{ color: SUCCESS_COLOR }}>✓</Text>
+                  )}
+                  <Text className="text-white text-base font-bold flex-shrink">
+                    {challenge.name}
+                  </Text>
+                </View>
                 <DifficultyBadge difficulty={challenge.difficulty} />
               </View>
               <Text className="text-neutral-500 text-xs leading-4">
@@ -241,13 +276,20 @@ function ChallengeSession({
   };
 
   // The 8-hit pass/fail verdict comes entirely from re-analyzing the raw
-  // waveform SyncRecorder just recorded — see scoreBattereLevareChallenge.
+  // waveform SyncRecorder just recorded — see scoreChallenge. The fixed
   // subdivision="quarter" below is only ever used for SyncRecorder's own
   // (here unused) live approximate status flash, never for this result.
   const handleSessionEnd = (summary: SessionSummary) => {
-    setResult(
-      scoreBattereLevareChallenge(summary.waveform, summary.bpm, summary.leadInMs),
+    const scored = scoreChallenge(
+      challenge,
+      summary.waveform,
+      summary.bpm,
+      summary.leadInMs,
     );
+    setResult(scored);
+    if (scored.passed) {
+      markChallengeCompleted(challenge.id);
+    }
   };
 
   const isCountIn = phase === "countIn";
