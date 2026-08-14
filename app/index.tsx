@@ -12,6 +12,7 @@ import SyncRecorder, {
   type TripletTarget,
 } from "@/components/sync-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
+import TutorialScreen from "@/components/tutorial-screen";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -219,6 +220,11 @@ export default function Home() {
   const [syncStatus, setSyncStatus] = useState<OnsetStatus | null>(null);
   const [syncOffsetMs, setSyncOffsetMs] = useState<number | null>(null);
 
+  // Shown once, before everything else (including the mic permission gate)
+  // — see components/tutorial-screen.tsx, which self-checks AsyncStorage
+  // and calls back immediately without rendering if already dismissed in a
+  // previous session.
+  const [showTutorial, setShowTutorial] = useState(true);
   // UI-only setup step, shown before every session — no wiring to bpm/phase
   // or the metronome engine yet, just local visual selection state (see
   // components/session-setup.tsx).
@@ -359,6 +365,10 @@ export default function Home() {
     setCountInBeat(null);
     setPhase("recording");
   };
+
+  if (showTutorial) {
+    return <TutorialScreen onDone={() => setShowTutorial(false)} />;
+  }
 
   if (showChallenges) {
     return <ChallengeScreen onBack={() => setShowChallenges(false)} />;
