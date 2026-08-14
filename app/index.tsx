@@ -1,5 +1,6 @@
 import BeatIndicator from "@/components/beat-indicator";
 import DarkPanel from "@/components/dark-panel";
+import MicPermissionGate from "@/components/mic-permission-gate";
 import SessionReport from "@/components/session-report";
 import SessionSetup, { GlowDivider } from "@/components/session-setup";
 import SyncRecorder, {
@@ -250,6 +251,10 @@ export default function Home() {
   // or the metronome engine yet, just local visual selection state (see
   // components/session-setup.tsx).
   const [showSetup, setShowSetup] = useState(true);
+  // Gates the setup UI below until microphone access is granted — see
+  // components/mic-permission-gate.tsx, which also fires the native
+  // permission prompt itself the first time this is false.
+  const [micGranted, setMicGranted] = useState(false);
   const [setupBars, setSetupBars] = useState(1);
   const [setupSubdivision, setSetupSubdivision] = useState<Subdivision>("quarter");
   // Which triplet note (2nd or 3rd) to evaluate — only meaningful when
@@ -401,13 +406,17 @@ export default function Home() {
           paddingBottom: insets.bottom + 24,
         }}
       >
-        <SessionSetup
-          bars={setupBars}
-          onBarsChange={setSetupBars}
-          subdivision={setupSubdivision}
-          onSubdivisionChange={setSetupSubdivision}
-          onStart={handleSetupStart}
-        />
+        {micGranted ? (
+          <SessionSetup
+            bars={setupBars}
+            onBarsChange={setSetupBars}
+            subdivision={setupSubdivision}
+            onSubdivisionChange={setSetupSubdivision}
+            onStart={handleSetupStart}
+          />
+        ) : (
+          <MicPermissionGate onGranted={() => setMicGranted(true)} />
+        )}
       </LinearGradient>
     );
   }

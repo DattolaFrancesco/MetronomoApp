@@ -1,6 +1,7 @@
 import {
   BEATS_PER_BAR,
   currentWindowHalfMs,
+  SUBDIVISION_STEPS,
   WAVEFORM_SAMPLE_INTERVAL_MS,
   type SessionSummary,
 } from "@/components/sync-recorder";
@@ -33,6 +34,13 @@ const SIXTEENTH_TICK_HEIGHT_RATIO = 0.4;
 const BARLINE_COLOR = "rgba(255,255,255,0.7)";
 const QUARTER_TICK_COLOR = "rgba(255,255,255,0.55)";
 const SIXTEENTH_TICK_COLOR = "rgba(255,255,255,0.16)";
+// The triplet's 2 off-beat notes ("triplet" mode only, sub-beats 1 and 2 —
+// never the quarter/battere itself) — full-height like the quarter tick so
+// they still read as real rhythmic positions, just dimmer/thinner.
+// Deliberately more visible than SIXTEENTH_TICK_COLOR: unlike that fixed
+// unlabeled ruler, these are real triplet subdivisions of the session that
+// was actually recorded.
+const TRIPLET_SECONDARY_TICK_COLOR = "rgba(255,255,255,0.3)";
 const WAVEFORM_FILL_COLOR = "rgba(255,138,128,0.35)";
 
 // One line per accepted onset, on-time or not — the chips/stat counts in
@@ -46,6 +54,13 @@ type BarRow = {
   waveformPath: SkPath;
   quarterTickPath: SkPath;
   sixteenthTickPath: SkPath;
+  // Only populated when summary.subdivision is "triplet" — the two
+  // off-beat triplet notes (sub-beats 1 and 2) of each quarter, always
+  // secondary regardless of which one is the session's evaluated
+  // TripletTarget (see the isTriplet branch below). Stays an empty path
+  // (renders nothing) for every other subdivision, so it's always safe to
+  // include in the Canvas below.
+  tripletSecondaryTickPath: SkPath;
   barlinePath: SkPath;
   onsetPath: SkPath;
   quarterLabels: { x: number; label: string }[];
@@ -57,6 +72,7 @@ type DebugChartProps = {
 
 export default function DebugChart({ summary }: DebugChartProps) {
   const [width, setWidth] = useState(0);
+  const isTriplet = summary.subdivision === "triplet";
 
   const beatIntervalMs = 60000 / summary.bpm;
   const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
@@ -144,11 +160,46 @@ export default function DebugChart({ summary }: DebugChartProps) {
 
       const quarterTickPath = Skia.Path.Make();
       const sixteenthTickPath = Skia.Path.Make();
+      const tripletSecondaryTickPath = Skia.Path.Make();
       const barlinePath = Skia.Path.Make();
       const quarterLabels: { x: number; label: string }[] = [];
 
+      // "triplet" gets its own branch: instead of one tick per quarter plus
+      // a subdivision-agnostic 16th ruler, draw all 3 real triplet
+      // positions of every quarter. Prominence here tracks rhythmic
+      // *structure*, not which note is being evaluated: sub-beat 0 (the
+      // quarter's own battere — always the first of the 3 points generated,
+      // by construction of the `sub * subIntervalMs` formula below) gets
+      // the exact same standard white tick + numbered label every other
+      // subdivision already uses; for q === 0 that position is also the
+      // true start of the bar, which barlinePath below independently
+      // stamps with its own heavier marker, so the very first line of the
+      // bar reads as the most prominent one without extra styling here.
+      // Sub-beats 1 and 2 (the triplet's two off-beat notes) always get the
+      // dimmer/thinner secondary treatment, regardless of which one is
+      // this session's evaluated TripletTarget — which one actually got
+      // judged is shown by the red onset line, not by grid emphasis.
       for (let q = 0; q < BEATS_PER_BAR; q++) {
         const quarterTime = nominalStart + q * beatIntervalMs;
+
+        if (isTriplet) {
+          const steps = SUBDIVISION_STEPS.triplet;
+          const subIntervalMs = beatIntervalMs / steps;
+          for (let sub = 0; sub < steps; sub++) {
+            const subX =
+              (quarterTime + sub * subIntervalMs - barStart) * rowPxPerMs;
+            if (sub === 0) {
+              quarterTickPath.moveTo(subX, TOP_LABEL_LANE);
+              quarterTickPath.lineTo(subX, TOP_LABEL_LANE + CHART_HEIGHT);
+              quarterLabels.push({ x: subX, label: String(q + 1) });
+            } else {
+              tripletSecondaryTickPath.moveTo(subX, TOP_LABEL_LANE);
+              tripletSecondaryTickPath.lineTo(subX, TOP_LABEL_LANE + CHART_HEIGHT);
+            }
+          }
+          continue;
+        }
+
         const x = (quarterTime - barStart) * rowPxPerMs;
 
         quarterTickPath.moveTo(x, TOP_LABEL_LANE);
@@ -189,6 +240,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
         waveformPath,
         quarterTickPath,
         sixteenthTickPath,
+        tripletSecondaryTickPath,
         barlinePath,
         onsetPath,
         quarterLabels,
@@ -204,17 +256,25 @@ export default function DebugChart({ summary }: DebugChartProps) {
     summary.events,
     summary.maxBars,
     summary.leadInMs,
+    summary.subdivision,
   ]);
 
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        Le righe bianche numerate segnano i quarti, le lineette corte i
-        sedicesimi. La linea rossa piena è il picco rilevato dal microfono.
+        {isTriplet
+          ? "Le righe bianche numerate segnano i quarti (il battere), le righe più sottili le due suddivisioni della terzina. La linea rossa piena è il picco rilevato dal microfono."
+          : "Le righe bianche numerate segnano i quarti, le lineette corte i sedicesimi. La linea rossa piena è il picco rilevato dal microfono."}
       </Text>
 
       <View className="flex-row flex-wrap gap-x-3 gap-y-1">
         <LegendLine color={QUARTER_TICK_COLOR} label="quarto" />
+        {isTriplet && (
+          <LegendLine
+            color={TRIPLET_SECONDARY_TICK_COLOR}
+            label="suddivisioni terzina"
+          />
+        )}
         <LegendLine color={ONSET_LINE_COLOR} label="colpo" />
       </View>
 
@@ -228,6 +288,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
               <Canvas style={{ width, height: CHART_TOTAL_HEIGHT }}>
                 <Path path={row.waveformPath} color={WAVEFORM_FILL_COLOR} style="fill" />
                 <Path path={row.sixteenthTickPath} color={SIXTEENTH_TICK_COLOR} style="stroke" strokeWidth={1} />
+                <Path path={row.tripletSecondaryTickPath} color={TRIPLET_SECONDARY_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.quarterTickPath} color={QUARTER_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.barlinePath} color={BARLINE_COLOR} style="stroke" strokeWidth={2} />
                 <Path path={row.onsetPath} color={ONSET_LINE_COLOR} style="stroke" strokeWidth={2} />

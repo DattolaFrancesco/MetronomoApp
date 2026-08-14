@@ -4,10 +4,13 @@ import {
   computeClickGateEnd,
   computeExpectedHits,
   computeSubBeatTimestamps,
+  evaluatedSubBeats,
   findOnsetPeaks,
   isWithinClickGate,
   MIN_PEAK_AMPLITUDE,
   pickPeakInRange,
+  primarySubBeat,
+  SUBDIVISION_STEPS,
 } from "./rhythm-detection";
 
 describe("computeExpectedHits — expected timestamps per subdivision", () => {
@@ -55,6 +58,19 @@ describe("computeSubBeatTimestamps — equidistant sub-beat grid", () => {
     expect(points[1] - points[0]).toBeCloseTo(points[2] - points[1], 5);
   });
 
+  // Regression guard for the debug-chart.tsx triplet grid: it inlines this
+  // same "quarterTime + sub * subIntervalMs" formula per quarter, and its
+  // most prominent tick (the bar/quarter downbeat) is always drawn at
+  // sub-beat index 0. That's only correct if index 0 is guaranteed to be
+  // the quarter's own timestamp, unshifted — verified here at a non-zero
+  // beatTime too, since an off-by-one in the point order could easily pass
+  // at beatTime 0 by coincidence but not elsewhere.
+  test("triplet: sub-beat index 0 always coincides exactly with the quarter's own timestamp", () => {
+    const beatTime = 2000;
+    const points = computeSubBeatTimestamps(beatTime, BPM, "triplet");
+    expect(points[0]).toBe(beatTime);
+  });
+
   test("sixteenth: 4 equidistant points 125ms apart", () => {
     const points = computeSubBeatTimestamps(0, BPM, "sixteenth");
     expect(points).toEqual([0, 125, 250, 375]);
@@ -63,6 +79,45 @@ describe("computeSubBeatTimestamps — equidistant sub-beat grid", () => {
   test("eighth: 2 equidistant points 250ms apart", () => {
     const points = computeSubBeatTimestamps(0, BPM, "eighth");
     expect(points).toEqual([0, 250]);
+  });
+});
+
+describe("primarySubBeat / evaluatedSubBeats — live BeatDot prominence (beat-indicator.tsx, the recording screen). NOT used by debug-chart.tsx's report grid: that grid's prominent tick is always the quarter/battere (sub-beat 0) regardless of TripletTarget, so it stays a stable structural reference across the whole bar.", () => {
+  test("triplet target 2: the 2nd note is primary, battere (0) and 3rd note (2) are secondary", () => {
+    expect(primarySubBeat("triplet", 2)).toBe(1);
+    expect(evaluatedSubBeats("triplet", 2)).toEqual([1]);
+
+    const secondary = Array.from(
+      { length: SUBDIVISION_STEPS.triplet },
+      (_, sub) => sub,
+    ).filter((sub) => sub !== primarySubBeat("triplet", 2));
+    expect(secondary).toEqual([0, 2]);
+  });
+
+  test("triplet target 3: the 3rd note is primary, battere (0) and 2nd note (1) are secondary", () => {
+    expect(primarySubBeat("triplet", 3)).toBe(2);
+    expect(evaluatedSubBeats("triplet", 3)).toEqual([2]);
+
+    const secondary = Array.from(
+      { length: SUBDIVISION_STEPS.triplet },
+      (_, sub) => sub,
+    ).filter((sub) => sub !== primarySubBeat("triplet", 3));
+    expect(secondary).toEqual([0, 1]);
+  });
+
+  test("triplet: the battere (sub-beat 0) is never primary — it's not a selectable TripletTarget", () => {
+    expect(primarySubBeat("triplet", 2)).not.toBe(0);
+    expect(primarySubBeat("triplet", 3)).not.toBe(0);
+  });
+
+  test("SUBDIVISION_STEPS.triplet is 3 — the grid always has exactly 3 tick positions per quarter", () => {
+    expect(SUBDIVISION_STEPS.triplet).toBe(3);
+  });
+
+  test("quarter/eighth/sixteenth: primarySubBeat unaffected (not in scope for the triplet grid fix)", () => {
+    expect(primarySubBeat("quarter", 2)).toBe(0);
+    expect(primarySubBeat("eighth", 2)).toBe(1);
+    expect(primarySubBeat("sixteenth", 2)).toBe(0);
   });
 });
 
