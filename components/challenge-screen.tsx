@@ -8,7 +8,7 @@ import {
   markChallengeCompleted,
 } from "@/lib/challenge-progress";
 import {
-  CHALLENGE_TOLERANCE_MS,
+  challengeBars,
   CHALLENGES,
   scoreChallenge,
   type Challenge,
@@ -48,11 +48,13 @@ const DIFFICULTY_LABEL: Record<ChallengeDifficulty, string> = {
   facile: "Facile",
   medio: "Medio",
   difficile: "Difficile",
+  expert: "Expert",
 };
 const DIFFICULTY_COLOR: Record<ChallengeDifficulty, string> = {
   facile: SUCCESS_COLOR,
   medio: "#FF9F0A",
   difficile: FAIL_COLOR,
+  expert: "#BF5AF2",
 };
 
 function DifficultyBadge({ difficulty }: { difficulty: ChallengeDifficulty }) {
@@ -360,8 +362,8 @@ function ChallengeSession({
           countInBeats={COUNT_IN_BEATS}
           bpm={bpm}
           subdivision="quarter"
-          toleranceMs={CHALLENGE_TOLERANCE_MS}
-          maxBars={2}
+          toleranceMs={challenge.toleranceMs}
+          maxBars={challengeBars(challenge)}
           onSessionEnd={handleSessionEnd}
           onRecordingStart={handleRecordingStart}
           onLimitReached={handleLimitReached}
