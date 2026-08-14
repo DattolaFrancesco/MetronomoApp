@@ -188,6 +188,7 @@ type SessionSetupProps = {
   subdivision: Subdivision;
   onSubdivisionChange: (subdivision: Subdivision) => void;
   onStart: () => void;
+  onChallenges: () => void;
 };
 
 export default function SessionSetup({
@@ -196,6 +197,7 @@ export default function SessionSetup({
   subdivision,
   onSubdivisionChange,
   onStart,
+  onChallenges,
 }: SessionSetupProps) {
   const barsIndex = Math.max(0, BARS_OPTIONS.indexOf(bars as (typeof BARS_OPTIONS)[number]));
   const subdivisionIndex = Math.max(
@@ -213,16 +215,42 @@ export default function SessionSetup({
 
   return (
     <View className="flex-1">
-      <View className="flex-row items-center justify-between">
-        <Text className="text-white text-lg font-extrabold tracking-widest">
-          Tempo
+      <View className="gap-5">
+        <Text className="text-center text-2xl font-extrabold tracking-widest">
+          <Text style={{ color: "#FFFFFF" }}>Tim</Text>
+          <Text style={{ color: ACCENT_COLOR }}>i</Text>
+          <Text style={{ color: "#FFFFFF" }}>ng</Text>
         </Text>
-        <Text
-          className="text-[11px] font-bold uppercase tracking-[3px]"
-          style={{ color: ACCENT_COLOR }}
-        >
-          Setup
-        </Text>
+
+        <View className="flex-row gap-2">
+          <View
+            className="flex-1 py-3 rounded-xl items-center"
+            style={{
+              borderWidth: 2,
+              borderColor: ACCENT_COLOR,
+              backgroundColor: "rgba(255,59,48,0.12)",
+            }}
+          >
+            <Text
+              className="text-xs font-bold uppercase tracking-widest"
+              style={{ color: ACCENT_COLOR }}
+            >
+              Training
+            </Text>
+          </View>
+          <Pressable
+            onPress={onChallenges}
+            className="flex-1 py-3 rounded-xl items-center active:opacity-60"
+            style={{
+              borderWidth: 2,
+              borderColor: "rgba(255,255,255,0.15)",
+            }}
+          >
+            <Text className="text-xs font-bold uppercase tracking-widest text-neutral-400">
+              Challenge
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       <View className="flex-1 justify-center gap-6">
