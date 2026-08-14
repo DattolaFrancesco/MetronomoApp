@@ -13,7 +13,6 @@ import SyncRecorder, {
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
-  BPM_MAX,
   BPM_MIN,
   type BeatEventPayload,
   setBpm as setEngineBpm,
@@ -25,32 +24,41 @@ import ExpoPrecisionMetronomeModule, {
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { runOnJS, useSharedValue } from "react-native-reanimated";
+import Animated, {
+  interpolateColor,
+  runOnJS,
+  type SharedValue,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useSharedValue,
+  withDecay,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const ACCENT_COLOR = "#FF3B30";
 const COUNT_IN_BEATS = 4;
 
-// Single-word subdivision label for the recording screen's header —
-// matches the labels already used on the setup screen's Tempo carousel
-// (see components/session-setup.tsx's TEMPO_OPTIONS).
+// Single-word subdivision label for the recording screen's header — the
+// recording screen is in English; the setup screen's Tempo carousel (see
+// components/session-setup.tsx's TEMPO_OPTIONS) stays in Italian.
 const SUBDIVISION_LABELS: Record<Subdivision, string> = {
-  quarter: "Quarti",
-  eighth: "Ottavi",
-  triplet: "Terzine",
-  sixteenth: "Quartine",
+  quarter: "Quarters",
+  eighth: "Eighths",
+  triplet: "Triplets",
+  sixteenth: "Sixteenths",
 };
 
 type Phase = "idle" | "countIn" | "recording";
 
-const TOLERANCE_MIN_MS = 30;
-const TOLERANCE_MAX_MS = 200;
+const TOLERANCE_MIN_MS = 10;
+const TOLERANCE_MAX_MS = 120;
 const DEFAULT_TOLERANCE_MS = 100;
 
 const STATUS_META: Record<OnsetStatus, { label: string; color: string }> = {
-  onTime: { label: "A TEMPO", color: "#39FF6A" },
-  early: { label: "IN ANTICIPO", color: "#FF9F0A" },
-  late: { label: "IN RITARDO", color: "#FF453A" },
+  onTime: { label: "ON TIME", color: "#39FF6A" },
+  early: { label: "EARLY", color: "#FF9F0A" },
+  late: { label: "LATE", color: "#FF453A" },
 };
 const IDLE_COLOR = ACCENT_COLOR;
 
@@ -117,7 +125,7 @@ function ToleranceSlider({
     <DarkPanel className="px-5 py-5 gap-4">
       <View className="flex-row items-center justify-between">
         <Text className="text-neutral-500 text-[11px] font-bold uppercase tracking-[2px]">
-          Tolleranza
+          Tolerance
         </Text>
         <Text className="text-white text-sm font-extrabold">{toleranceMs}ms</Text>
       </View>
@@ -156,25 +164,112 @@ function ToleranceSlider({
           />
         </View>
       </GestureDetector>
-
-      <View className="flex-row items-center justify-between">
-        <Text className="text-neutral-500 text-[10px] font-semibold uppercase tracking-wider">
-          Preciso · {TOLERANCE_MIN_MS}
-        </Text>
-        <Text className="text-neutral-500 text-[10px] font-semibold uppercase tracking-wider">
-          Rilassato · {TOLERANCE_MAX_MS}
-        </Text>
-      </View>
     </DarkPanel>
   );
 }
 
-const TICK_COUNT = 25;
-// How many screen pixels of horizontal drag equal one BPM step — a scrub
-// ruler (relative drag), not a position-mapped slider: the tick strip
-// itself doesn't move, only the centered accent tick represents "current
+// How many screen pixels of horizontal drag equal one BPM step. The tick
+// strip itself now scrolls with the drag (see TempoTick/TempoRuler below)
+// — only the centered accent tick stays fixed, representing "current
 // value", same visual language as a camera exposure dial.
 const PX_PER_BPM = 6;
+
+// UI-exposed BPM ceiling — the native engine (BPM_MIN/BPM_MAX from
+// expo-precision-metronome) actually goes up to 300, but the app never
+// lets the user dial past this. The floor stays the engine's own BPM_MIN
+// (20) — only the top end is narrowed here.
+const APP_BPM_MAX = 200;
+// The same BPM_MIN/APP_BPM_MAX bounds, in the px units TempoRuler's
+// scrollX is actually clamped in (both live dragging and the inertial
+// coast after a fling — see TempoRuler).
+const SCROLL_MIN = BPM_MIN * PX_PER_BPM;
+const SCROLL_MAX = APP_BPM_MAX * PX_PER_BPM;
+
+// Pixel spacing between adjacent ticks in the scrolling ruler strip below.
+const TICK_SPACING = 14;
+// A tick within this many px of the fixed center accent grows/lights up —
+// gives whichever tick is currently passing under the accent a brief
+// "pop", fading out symmetrically as it scrolls away on either side.
+const TICK_GLOW_RADIUS = TICK_SPACING;
+const TICK_GLOW_SCALE_Y = 2.4;
+const TICK_GLOW_SCALE_X = 2.2;
+const TICK_DIM_COLOR = "rgba(255,255,255,0.3)";
+const TICK_LIT_COLOR = "rgba(255,255,255,0.95)";
+
+function mod(value: number, base: number): number {
+  "worklet";
+  return ((value % base) + base) % base;
+}
+
+// A single tick at a fixed rest position (`index` cells from center) in
+// the scrolling ruler strip. `scrollX` is the drag distance in px since
+// the ruler was first touched, already clamped to stop moving the instant
+// bpm hits BPM_MIN/APP_BPM_MAX (see TempoRuler) — reading it directly (not
+// some intermediate "did bpm change" event) is what makes every tick
+// visually follow the finger 1:1, exactly like dragging a real ruler under
+// a fixed pointer, while still refusing to scroll any further once there's
+// nowhere left for the value to go. `translateX` shifts every tick by the
+// same wrapped offset each frame; because ticks are spaced exactly
+// TICK_SPACING apart and look identical, wrapping that offset back into
+// [0, TICK_SPACING) makes the strip read as an infinite ruler from a
+// small, fixed set of rendered ticks (see TempoRuler) instead of needing
+// to render one per BPM step. The same wrapped offset also gives each
+// tick's *current* on-screen distance from the fixed center — driving the
+// proximity glow so whichever physical tick currently sits nearest center
+// pops as it passes, and hands off smoothly to its neighbor as scrolling
+// continues. `isDragging` (0 or 1, eased) gates that glow entirely: at
+// rest every tick is small and grey regardless of where it happens to sit,
+// so the "in focus" look only ever appears while actively dragging.
+function TempoTick({
+  index,
+  scrollX,
+  isDragging,
+}: {
+  index: number;
+  scrollX: SharedValue<number>;
+  isDragging: SharedValue<number>;
+}) {
+  const animatedStyle = useAnimatedStyle(() => {
+    const wrapped = mod(scrollX.value, TICK_SPACING);
+    const distanceFromCenter = index * TICK_SPACING + wrapped;
+    const proximity =
+      Math.max(0, 1 - Math.abs(distanceFromCenter) / TICK_GLOW_RADIUS) *
+      isDragging.value;
+    return {
+      transform: [
+        { translateX: wrapped },
+        { scaleX: 1 + proximity * (TICK_GLOW_SCALE_X - 1) },
+        { scaleY: 1 + proximity * (TICK_GLOW_SCALE_Y - 1) },
+      ],
+      backgroundColor: interpolateColor(
+        proximity,
+        [0, 1],
+        [TICK_DIM_COLOR, TICK_LIT_COLOR],
+      ),
+      shadowOpacity: proximity * 0.9,
+    };
+  });
+
+  return (
+    <Animated.View
+      style={[
+        {
+          position: "absolute",
+          left: "50%",
+          marginLeft: index * TICK_SPACING - 0.5,
+          width: 1,
+          height: 18,
+          borderRadius: 1,
+          backgroundColor: TICK_DIM_COLOR,
+          shadowColor: "#FFFFFF",
+          shadowRadius: 6,
+          shadowOffset: { width: 0, height: 0 },
+        },
+        animatedStyle,
+      ]}
+    />
+  );
+}
 
 function TempoRuler({
   bpm,
@@ -183,58 +278,135 @@ function TempoRuler({
   bpm: number;
   onChange: (bpm: number) => void;
 }) {
-  // The bpm this gesture started from — a shared (UI-thread) value instead
-  // of a ref, set once per gesture in onBegin and read from onUpdate, so
-  // e.translationX (cumulative since gesture start, provided by RNGH) is
-  // always applied relative to a fixed baseline instead of the
-  // continuously-changing current bpm.
-  const bpmAtGestureStart = useSharedValue(bpm);
+  const [width, setWidth] = useState(0);
+
+  // scrollX is the single source of truth for both the ruler's visuals
+  // (TempoTick reads it directly) and the bpm value itself — it's always
+  // kept equal to bpm*PX_PER_BPM in px, clamped to SCROLL_MIN/SCROLL_MAX
+  // (BPM_MIN/APP_BPM_MAX in px). Initialized once from the incoming bpm
+  // prop and never resynced from it afterwards: this component is the
+  // only thing that ever changes bpm in this app, so re-reading the prop
+  // back in would just be reacting to its own output one render later —
+  // harmless most of the time, but it would snap scrollX to whole-BPM
+  // pixel positions on every frame of a fling below, killing the smooth
+  // sub-pixel coast.
+  const scrollX = useSharedValue(bpm * PX_PER_BPM);
+  const scrollAtGestureStart = useSharedValue(0);
+  // 0 at rest, 1 while a finger is down or the ruler is still coasting
+  // from a fling — gates TempoTick's glow (see there) so the ruler is
+  // small and grey once it's fully settled, and eases in/out instead of
+  // cutting sharply.
+  const isDragging = useSharedValue(0);
+
+  // The only place scrollX ever turns into a bpm value, so dragging and
+  // the inertial coast after a fling (see onEnd below) push updates to
+  // `onChange` through the exact same path instead of two separate ones
+  // that could disagree. Reanimated calls this on every UI-thread frame
+  // scrollX changes; `previous` is null on the very first call (nothing to
+  // report yet) and unchanged between no-op frames, both skipped so
+  // onChange only fires on a genuine new bpm.
+  useAnimatedReaction(
+    () => scrollX.value,
+    (current, previous) => {
+      if (previous === null || current === previous) return;
+      const nextBpm = Math.min(
+        APP_BPM_MAX,
+        Math.max(BPM_MIN, Math.round(current / PX_PER_BPM)),
+      );
+      runOnJS(onChange)(nextBpm);
+    },
+  );
 
   // Not memoized: Gesture objects are cheap, plain descriptors (not native
   // handles), and GestureDetector is meant to receive a fresh one each
   // render — this is the pattern react-native-gesture-handler's own docs
   // use (see the pinch gesture in debug-chart.tsx). That means onBegin
-  // always captures the current `bpm` prop, and onUpdate always calls the
-  // current `onChange` prop, with no ref needed for either.
+  // always captures the current `scrollX`, with no ref needed.
   const pan = Gesture.Pan()
     .onBegin(() => {
       "worklet";
-      bpmAtGestureStart.value = bpm;
+      scrollAtGestureStart.value = scrollX.value;
+      isDragging.value = withTiming(1, { duration: 80 });
     })
     .onUpdate((e) => {
       "worklet";
-      const deltaBpm = Math.round(e.translationX / PX_PER_BPM);
-      const next = Math.min(BPM_MAX, Math.max(BPM_MIN, bpmAtGestureStart.value + deltaBpm));
-      runOnJS(onChange)(next);
+      // Dragging right increases bpm, left decreases it — same sign as
+      // the raw translation, so the strip visually follows the finger.
+      scrollX.value = Math.min(
+        SCROLL_MAX,
+        Math.max(SCROLL_MIN, scrollAtGestureStart.value + e.translationX),
+      );
+    })
+    .onEnd((e) => {
+      "worklet";
+      // A flick: hand scrollX off to a decay animation seeded with the
+      // gesture's release velocity, so the ruler keeps coasting and
+      // decelerating on its own instead of stopping dead the instant the
+      // finger lifts — same clamp bounds as the live drag above, so a
+      // hard fling still glides to a smooth stop exactly at BPM_MIN/
+      // APP_BPM_MAX instead of overshooting past them.
+      scrollX.value = withDecay(
+        {
+          velocity: e.velocityX,
+          deceleration: 0.995,
+          clamp: [SCROLL_MIN, SCROLL_MAX],
+        },
+        () => {
+          isDragging.value = withTiming(0, { duration: 220 });
+        },
+      );
+    })
+    .onFinalize((_e, success) => {
+      "worklet";
+      // Gesture never reached onEnd (e.g. interrupted/cancelled) — the
+      // decay above never got scheduled, so this is the only place left
+      // to fade the glow back out.
+      if (!success) {
+        isDragging.value = withTiming(0, { duration: 220 });
+      }
     });
 
-  const centerIndex = Math.floor(TICK_COUNT / 2);
+  // Enough ticks to cover the measured width plus one extra spacing unit
+  // on each side, so wrapping (see TempoTick) never reveals a gap at the
+  // edges while dragging.
+  const tickHalfCount =
+    width > 0 ? Math.ceil(width / 2 / TICK_SPACING) + 1 : 0;
 
   return (
     <GestureDetector gesture={pan}>
-      <View className="flex-row items-center justify-between" style={{ height: 32 }}>
-        {Array.from({ length: TICK_COUNT }).map((_, i) => {
-          const isCenter = i === centerIndex;
+      <View
+        onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+        style={{ height: 32, justifyContent: "center", overflow: "hidden" }}
+      >
+        {Array.from({ length: tickHalfCount * 2 + 1 }).map((_, i) => {
+          const index = i - tickHalfCount;
           return (
-            <View
-              key={i}
-              style={{
-                width: isCenter ? 2 : 1,
-                height: isCenter ? 30 : 18,
-                borderRadius: 1,
-                backgroundColor: isCenter ? ACCENT_COLOR : "rgba(255,255,255,0.3)",
-                ...(isCenter
-                  ? {
-                      shadowColor: ACCENT_COLOR,
-                      shadowOpacity: 0.85,
-                      shadowRadius: 8,
-                      shadowOffset: { width: 0, height: 0 },
-                    }
-                  : null),
-              }}
+            <TempoTick
+              key={index}
+              index={index}
+              scrollX={scrollX}
+              isDragging={isDragging}
             />
           );
         })}
+
+        {/* The fixed reference point everything above scrolls past — never
+            animated, always centered, always the same size/color. */}
+        <View
+          style={{
+            position: "absolute",
+            left: "50%",
+            marginLeft: -1,
+            width: 2,
+            height: 30,
+            borderRadius: 1,
+            backgroundColor: ACCENT_COLOR,
+            shadowColor: ACCENT_COLOR,
+            shadowOpacity: 0.85,
+            shadowRadius: 8,
+            shadowOffset: { width: 0, height: 0 },
+          }}
+        />
       </View>
     </GestureDetector>
   );
@@ -402,7 +574,7 @@ export default function Home() {
   };
 
   const applyBpm = (newBpm: number) => {
-    const clamped = clamp(newBpm, BPM_MIN, BPM_MAX);
+    const clamped = clamp(newBpm, BPM_MIN, APP_BPM_MAX);
     setBpm(clamped);
     if (phase !== "idle") setEngineBpm(clamped);
   };
@@ -479,8 +651,8 @@ export default function Home() {
   const label = statusMeta
     ? statusMeta.label
     : phase === "recording"
-      ? "IN ASCOLTO"
-      : "PRONTO";
+      ? "LISTENING"
+      : "READY";
   const color = statusMeta ? statusMeta.color : IDLE_COLOR;
 
   return (
@@ -532,7 +704,7 @@ export default function Home() {
           </View>
         )}
 
-        {/* Only shown once a session is actually running (after Avvia) —
+        {/* Only shown once a session is actually running (after Start) —
             the setup screen already lets you preview subdivisions before
             starting, so there's nothing useful to light up while idle. */}
         {phase !== "idle" && (
@@ -551,7 +723,7 @@ export default function Home() {
             screen). See TargetPicker. */}
         {setupSubdivision === "triplet" && phase === "idle" && (
           <TargetPicker
-            label="Nota da valutare"
+            label="Note to evaluate"
             options={[2, 3] as const}
             value={tripletTarget}
             onChange={setTripletTarget}
@@ -559,7 +731,7 @@ export default function Home() {
         )}
         {setupSubdivision === "sixteenth" && phase === "idle" && (
           <TargetPicker
-            label="Nota da valutare"
+            label="Note to evaluate"
             options={[2, 3, 4] as const}
             value={sixteenthTarget}
             onChange={setSixteenthTarget}
@@ -649,7 +821,7 @@ export default function Home() {
               textShadowOffset: { width: 0, height: 0 },
             }}
           >
-            {phase !== "idle" ? "Stop" : "Avvia"}
+            {phase !== "idle" ? "Stop" : "Start"}
           </Text>
         </Pressable>
       </View>

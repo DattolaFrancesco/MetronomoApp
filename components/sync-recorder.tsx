@@ -865,9 +865,9 @@ export default function SyncRecorder({
         </View>
       )}
 
-      <Text className="text-neutral-600 text-[10px] leading-4">
-        Suggerimento: usa cuffie o auricolari per una rilevazione più precisa —
-        evita che il microfono capti anche il click del metronomo.
+      <Text className="text-neutral-600 text-xs leading-4">
+        Tip: use headphones or earbuds for more precise detection — this
+        keeps the mic from also picking up the metronome's own click.
       </Text>
     </DarkPanel>
   );

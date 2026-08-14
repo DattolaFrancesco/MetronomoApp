@@ -231,7 +231,7 @@ export default function SessionSetup({
             className="text-[11px] font-bold uppercase tracking-[3px]"
             style={{ color: ACCENT_COLOR }}
           >
-            Battute
+            Bars
           </Text>
           <Carousel
             items={BARS_OPTIONS}
@@ -318,7 +318,7 @@ export default function SessionSetup({
             textShadowOffset: { width: 0, height: 0 },
           }}
         >
-          Inizia
+          Start
         </Text>
       </Pressable>
     </View>
