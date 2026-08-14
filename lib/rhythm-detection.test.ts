@@ -17,32 +17,40 @@ describe("computeExpectedHits — expected timestamps per subdivision", () => {
   const BPM = 120; // beatIntervalMs = 500
 
   test("quarter: one hit per beat, every 500ms", () => {
-    const hits = computeExpectedHits(BPM, "quarter", 2, 4);
+    const hits = computeExpectedHits(BPM, "quarter", 2, 2, 4);
     expect(hits.map((h) => h.time)).toEqual([0, 500, 1000, 1500]);
     expect(hits.every((h) => h.subBeatIndex === 0)).toBe(true);
     expect(hits.map((h) => h.beatIndex)).toEqual([0, 1, 2, 3]);
   });
 
   test("eighth: only the levare, at 250ms/750ms/1250ms/1750ms", () => {
-    const hits = computeExpectedHits(BPM, "eighth", 2, 4);
+    const hits = computeExpectedHits(BPM, "eighth", 2, 2, 4);
     expect(hits.map((h) => h.time)).toEqual([250, 750, 1250, 1750]);
     expect(hits.every((h) => h.subBeatIndex === 1)).toBe(true);
   });
 
   test("triplet: only the chosen note (2nd or 3rd), one per beat", () => {
-    const second = computeExpectedHits(BPM, "triplet", 2, 2);
+    const second = computeExpectedHits(BPM, "triplet", 2, 2, 2);
     expect(second.map((h) => h.subBeatIndex)).toEqual([1, 1]);
     expect(second[0].time).toBeCloseTo(500 / 3, 5);
 
-    const third = computeExpectedHits(BPM, "triplet", 3, 2);
+    const third = computeExpectedHits(BPM, "triplet", 3, 2, 2);
     expect(third.map((h) => h.subBeatIndex)).toEqual([2, 2]);
     expect(third[0].time).toBeCloseTo((500 * 2) / 3, 5);
   });
 
-  test("sixteenth: all 4 sub-beats evaluated per beat", () => {
-    const hits = computeExpectedHits(BPM, "sixteenth", 2, 1);
-    expect(hits.map((h) => h.subBeatIndex)).toEqual([0, 1, 2, 3]);
-    expect(hits.map((h) => h.time)).toEqual([0, 125, 250, 375]);
+  test("sixteenth: only the chosen note (2nd, 3rd, or 4th), one per beat", () => {
+    const second = computeExpectedHits(BPM, "sixteenth", 2, 2, 2);
+    expect(second.map((h) => h.subBeatIndex)).toEqual([1, 1]);
+    expect(second[0].time).toBe(125);
+
+    const third = computeExpectedHits(BPM, "sixteenth", 2, 3, 2);
+    expect(third.map((h) => h.subBeatIndex)).toEqual([2, 2]);
+    expect(third[0].time).toBe(250);
+
+    const fourth = computeExpectedHits(BPM, "sixteenth", 2, 4, 2);
+    expect(fourth.map((h) => h.subBeatIndex)).toEqual([3, 3]);
+    expect(fourth[0].time).toBe(375);
   });
 });
 
@@ -76,48 +84,78 @@ describe("computeSubBeatTimestamps — equidistant sub-beat grid", () => {
     expect(points).toEqual([0, 125, 250, 375]);
   });
 
+  // Same regression guard as the triplet one above, for "sixteenth" —
+  // debug-chart.tsx's subdivision grid branch covers both.
+  test("sixteenth: sub-beat index 0 always coincides exactly with the quarter's own timestamp", () => {
+    const beatTime = 2000;
+    const points = computeSubBeatTimestamps(beatTime, BPM, "sixteenth");
+    expect(points[0]).toBe(beatTime);
+  });
+
   test("eighth: 2 equidistant points 250ms apart", () => {
     const points = computeSubBeatTimestamps(0, BPM, "eighth");
     expect(points).toEqual([0, 250]);
   });
 });
 
-describe("primarySubBeat / evaluatedSubBeats — live BeatDot prominence (beat-indicator.tsx, the recording screen). NOT used by debug-chart.tsx's report grid: that grid's prominent tick is always the quarter/battere (sub-beat 0) regardless of TripletTarget, so it stays a stable structural reference across the whole bar.", () => {
+describe("primarySubBeat / evaluatedSubBeats — live BeatDot prominence (beat-indicator.tsx, the recording screen). NOT used by debug-chart.tsx's report grid: that grid's prominent tick is always the quarter/battere (sub-beat 0) regardless of TripletTarget/SixteenthTarget, so it stays a stable structural reference across the whole bar.", () => {
   test("triplet target 2: the 2nd note is primary, battere (0) and 3rd note (2) are secondary", () => {
-    expect(primarySubBeat("triplet", 2)).toBe(1);
-    expect(evaluatedSubBeats("triplet", 2)).toEqual([1]);
+    expect(primarySubBeat("triplet", 2, 2)).toBe(1);
+    expect(evaluatedSubBeats("triplet", 2, 2)).toEqual([1]);
 
     const secondary = Array.from(
       { length: SUBDIVISION_STEPS.triplet },
       (_, sub) => sub,
-    ).filter((sub) => sub !== primarySubBeat("triplet", 2));
+    ).filter((sub) => sub !== primarySubBeat("triplet", 2, 2));
     expect(secondary).toEqual([0, 2]);
   });
 
   test("triplet target 3: the 3rd note is primary, battere (0) and 2nd note (1) are secondary", () => {
-    expect(primarySubBeat("triplet", 3)).toBe(2);
-    expect(evaluatedSubBeats("triplet", 3)).toEqual([2]);
+    expect(primarySubBeat("triplet", 3, 2)).toBe(2);
+    expect(evaluatedSubBeats("triplet", 3, 2)).toEqual([2]);
 
     const secondary = Array.from(
       { length: SUBDIVISION_STEPS.triplet },
       (_, sub) => sub,
-    ).filter((sub) => sub !== primarySubBeat("triplet", 3));
+    ).filter((sub) => sub !== primarySubBeat("triplet", 3, 2));
     expect(secondary).toEqual([0, 1]);
   });
 
   test("triplet: the battere (sub-beat 0) is never primary — it's not a selectable TripletTarget", () => {
-    expect(primarySubBeat("triplet", 2)).not.toBe(0);
-    expect(primarySubBeat("triplet", 3)).not.toBe(0);
+    expect(primarySubBeat("triplet", 2, 2)).not.toBe(0);
+    expect(primarySubBeat("triplet", 3, 2)).not.toBe(0);
   });
 
-  test("SUBDIVISION_STEPS.triplet is 3 — the grid always has exactly 3 tick positions per quarter", () => {
+  test("sixteenth target 2/3/4: that note is primary and the only one evaluated — the other 3 sub-beats (including the battere) are neither", () => {
+    for (const target of [2, 3, 4] as const) {
+      expect(primarySubBeat("sixteenth", 2, target)).toBe(target - 1);
+      expect(evaluatedSubBeats("sixteenth", 2, target)).toEqual([target - 1]);
+
+      const others = Array.from(
+        { length: SUBDIVISION_STEPS.sixteenth },
+        (_, sub) => sub,
+      ).filter((sub) => sub !== target - 1);
+      expect(others).toHaveLength(3);
+      expect(evaluatedSubBeats("sixteenth", 2, target)).not.toEqual(
+        expect.arrayContaining(others),
+      );
+    }
+  });
+
+  test("sixteenth: the battere (sub-beat 0) is never primary — it's not a selectable SixteenthTarget", () => {
+    expect(primarySubBeat("sixteenth", 2, 2)).not.toBe(0);
+    expect(primarySubBeat("sixteenth", 2, 3)).not.toBe(0);
+    expect(primarySubBeat("sixteenth", 2, 4)).not.toBe(0);
+  });
+
+  test("SUBDIVISION_STEPS.triplet is 3, SUBDIVISION_STEPS.sixteenth is 4 — the grid always has that many tick positions per quarter", () => {
     expect(SUBDIVISION_STEPS.triplet).toBe(3);
+    expect(SUBDIVISION_STEPS.sixteenth).toBe(4);
   });
 
-  test("quarter/eighth/sixteenth: primarySubBeat unaffected (not in scope for the triplet grid fix)", () => {
-    expect(primarySubBeat("quarter", 2)).toBe(0);
-    expect(primarySubBeat("eighth", 2)).toBe(1);
-    expect(primarySubBeat("sixteenth", 2)).toBe(0);
+  test("quarter/eighth: primarySubBeat unaffected (not in scope for the triplet/sixteenth target fix)", () => {
+    expect(primarySubBeat("quarter", 2, 2)).toBe(0);
+    expect(primarySubBeat("eighth", 2, 2)).toBe(1);
   });
 });
 
@@ -253,7 +291,7 @@ describe("analyzeSession — end-to-end behavior around a decaying tail", () => 
       0.18, 0.1, 0.05, // 750-850ms: decays back to silence
     ];
 
-    const { events } = analyzeSession(waveform, 850, 120, "quarter", 2, 90, 1);
+    const { events } = analyzeSession(waveform, 850, 120, "quarter", 2, 2, 90, 1);
     const beat1Event = events.find((e) => e.beatIndex === 1);
 
     expect(beat1Event).toBeDefined();
@@ -277,6 +315,7 @@ describe("analyzeSession — end-to-end behavior around a decaying tail", () => 
       120,
       "quarter",
       2,
+      2,
       90,
       1,
       100, // leadInMs
@@ -287,5 +326,72 @@ describe("analyzeSession — end-to-end behavior around a decaying tail", () => 
     expect(beat0Event!.elapsedMs).toBe(0); // still relative to the true first beat
     expect(beat0Event!.deltaMs).toBeCloseTo(-50, 0);
     expect(beat0Event!.status).toBe("onTime");
+  });
+});
+
+describe("analyzeSession — sixteenth-note single-target filtering (same end-to-end guarantee already validated for triplet)", () => {
+  test("sixteenthTarget 4: only the 4th sixteenth of each quarter is searched, evaluated, and reported — no residue on the other 3 positions", () => {
+    // 120 BPM: beatIntervalMs = 500, sub-beat interval = 125ms. Target 4 →
+    // sub-beat index 3, expected at quarter_time + 3*125ms (375/875/1375/1875ms).
+    // maxBars=1 → totalQuarters=4, so hitDiagnostics would have 16 entries
+    // (4 quarters * 4 sub-beats) if "sixteenth" still evaluated every
+    // sub-beat like before this fix — it must have exactly 4 instead, all
+    // at subBeatIndex 3, matching the single-target behavior already
+    // proven for "triplet" above.
+    const waveform = new Array(45).fill(0.05);
+    // The only real sound in the whole session: a single clean hit at
+    // bucket 7 (t=350ms), close to beat 0's expected 375ms (early by 25ms,
+    // well inside the default 90ms tolerance).
+    waveform[7] = 0.9;
+
+    const { events, hitDiagnostics } = analyzeSession(
+      waveform,
+      2200,
+      120,
+      "sixteenth",
+      2, // tripletTarget — irrelevant here
+      4, // sixteenthTarget: evaluate the 4th sixteenth (sub-beat index 3)
+      90,
+      1, // maxBars
+    );
+
+    expect(hitDiagnostics).toHaveLength(4);
+    expect(hitDiagnostics.every((h) => h.subBeatIndex === 3)).toBe(true);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].beatIndex).toBe(0);
+    expect(events[0].subBeatIndex).toBe(3);
+    expect(events[0].status).toBe("onTime");
+  });
+
+  test("sixteenthTarget 2: the same physical hit is now evaluated against the 2nd sixteenth instead — same sound, different verdict", () => {
+    // Same waveform/hit as above (bucket 7, t=350ms). With target 2
+    // (sub-beat index 1), beat 0's expected time is 125ms instead of
+    // 375ms — the hit still falls inside that window (matchRadius is half
+    // the beat interval, 250ms, so [-125, 375]) and still gets matched,
+    // but now 225ms late relative to this different expected timestamp,
+    // well outside the 90ms tolerance. Proves the evaluated position
+    // actually moved with the target, not just its label.
+    const waveform = new Array(45).fill(0.05);
+    waveform[7] = 0.9;
+
+    const { events, hitDiagnostics } = analyzeSession(
+      waveform,
+      2200,
+      120,
+      "sixteenth",
+      2,
+      2, // sixteenthTarget: evaluate the 2nd sixteenth (sub-beat index 1)
+      90,
+      1,
+    );
+
+    expect(hitDiagnostics.every((h) => h.subBeatIndex === 1)).toBe(true);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].beatIndex).toBe(0);
+    expect(events[0].subBeatIndex).toBe(1);
+    expect(events[0].deltaMs).toBeCloseTo(225, 0);
+    expect(events[0].status).toBe("late");
   });
 });

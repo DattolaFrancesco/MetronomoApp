@@ -1,5 +1,6 @@
 import {
   primarySubBeat,
+  type SixteenthTarget,
   SUBDIVISION_STEPS,
   type Subdivision,
   type TripletTarget,
@@ -24,12 +25,13 @@ const INACTIVE_BORDER = "#3A3A3C";
 
 type BeatDotProps = {
   active: boolean;
-  // The "primary" sub-beat (see PRIMARY_SUB_BEAT in sync-recorder.tsx) is
-  // drawn bigger/brighter; every other sub-beat is drawn smaller/dimmer.
-  // Normally that's the native quarter beat itself — but for "eighth"
-  // specifically, only the off-beat is actually judged by peak detection,
-  // so it's the off-beat that gets the prominent style here instead, even
-  // though the quarter is still shown (demoted to secondary).
+  // The "primary" sub-beat (see primarySubBeat in lib/rhythm-detection.ts)
+  // is drawn bigger/brighter; every other sub-beat is drawn smaller/dimmer.
+  // Normally that's the native quarter beat itself — but for "eighth",
+  // "triplet", and "sixteenth", only the chosen off-beat is actually judged
+  // by peak detection, so it's that off-beat that gets the prominent style
+  // here instead, even though the quarter is still shown (demoted to
+  // secondary).
   isPrimary: boolean;
 };
 
@@ -76,6 +78,7 @@ type BeatIndicatorProps = {
   bpm: number;
   subdivision?: Subdivision;
   tripletTarget?: TripletTarget;
+  sixteenthTarget?: SixteenthTarget;
 };
 
 export default function BeatIndicator({
@@ -83,9 +86,10 @@ export default function BeatIndicator({
   bpm,
   subdivision = "quarter",
   tripletTarget = 2,
+  sixteenthTarget = 2,
 }: BeatIndicatorProps) {
   const steps = SUBDIVISION_STEPS[subdivision];
-  const primarySub = primarySubBeat(subdivision, tripletTarget);
+  const primarySub = primarySubBeat(subdivision, tripletTarget, sixteenthTarget);
 
   // currentPoint spans 0..BEATS_PER_BAR*steps-1: sub-beat 0 of each quarter
   // is native truth (from onBeat), sub-beats 1..steps-1 have no native

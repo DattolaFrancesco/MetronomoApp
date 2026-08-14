@@ -16,6 +16,7 @@ import {
   MIN_ONSET_RISE,
   MIN_PEAK_AMPLITUDE,
   primarySubBeat,
+  type SixteenthTarget,
   SUBDIVISION_STEPS,
   WAVEFORM_SAMPLE_INTERVAL_MS,
   type HitDiagnostic,
@@ -69,6 +70,7 @@ export {
   type PeakRejectReason,
   type RejectedPeak,
   type SessionSummary,
+  type SixteenthTarget,
   type Subdivision,
   type TripletTarget,
 };
@@ -176,6 +178,9 @@ type SyncRecorderProps = {
   // "triplet" — chosen on the recording screen, not the setup step. Ignored
   // for every other subdivision.
   tripletTarget?: TripletTarget;
+  // Same idea as tripletTarget, for "sixteenth" (2nd/3rd/4th sixteenth
+  // note). Ignored for every other subdivision.
+  sixteenthTarget?: SixteenthTarget;
   // Fixed number of bars to auto-stop after (chosen on the setup screen).
   // Undefined means no auto-stop — the caller must stop manually. This is a
   // behavior change from the previous unlimited-until-Stop session: when
@@ -208,6 +213,7 @@ export default function SyncRecorder({
   toleranceMs = DEFAULT_TOLERANCE_MS,
   subdivision = "quarter",
   tripletTarget = 2,
+  sixteenthTarget = 2,
   maxBars,
   onSessionEnd,
   onStatusChange,
@@ -232,6 +238,7 @@ export default function SyncRecorder({
   const bpmRef = useRef(bpm);
   const subdivisionRef = useRef(subdivision);
   const tripletTargetRef = useRef(tripletTarget);
+  const sixteenthTargetRef = useRef(sixteenthTarget);
   const maxBarsRef = useRef(maxBars);
   const onLimitReachedRef = useRef(onLimitReached);
   // Native beat number (since the engine's own start()) of the beat that
@@ -332,6 +339,10 @@ export default function SyncRecorder({
   useEffect(() => {
     tripletTargetRef.current = tripletTarget;
   }, [tripletTarget]);
+
+  useEffect(() => {
+    sixteenthTargetRef.current = sixteenthTarget;
+  }, [sixteenthTarget]);
 
   useEffect(() => {
     maxBarsRef.current = maxBars;
@@ -669,13 +680,14 @@ export default function SyncRecorder({
         const windowHalf = currentWindowHalfMs(subIntervalMs);
 
         // One window per *evaluated* sub-beat — just the native beat itself
-        // for plain quarters, all `steps` positions for sixteenths, but only
-        // the chosen off-beat for eighths/triplets (see evaluatedSubBeats):
-        // every non-evaluated sub-beat intentionally never gets a window,
-        // so it can never become an accepted/rejected onset.
+        // for plain quarters, only the chosen off-beat for
+        // eighths/triplets/sixteenths (see evaluatedSubBeats): every
+        // non-evaluated sub-beat intentionally never gets a window, so it
+        // can never become an accepted/rejected onset.
         for (const sub of evaluatedSubBeats(
           subdivisionRef.current,
           tripletTargetRef.current,
+          sixteenthTargetRef.current,
         )) {
           openBeatWindow(now + sub * subIntervalMs, beatIndex, sub, windowHalf);
         }
@@ -784,6 +796,7 @@ export default function SyncRecorder({
           bpmRef.current,
           subdivisionRef.current,
           tripletTargetRef.current,
+          sixteenthTargetRef.current,
           toleranceRef.current,
           maxBarsRef.current,
           leadInMsRef.current,
@@ -798,6 +811,7 @@ export default function SyncRecorder({
           bpm: bpmRef.current,
           subdivision: subdivisionRef.current,
           tripletTarget: tripletTargetRef.current,
+          sixteenthTarget: sixteenthTargetRef.current,
           waveform: waveformRef.current,
           maxBars: maxBarsRef.current,
           leadInMs: leadInMsRef.current,

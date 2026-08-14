@@ -33,14 +33,20 @@ const SIXTEENTH_TICK_HEIGHT_RATIO = 0.4;
 
 const BARLINE_COLOR = "rgba(255,255,255,0.7)";
 const QUARTER_TICK_COLOR = "rgba(255,255,255,0.55)";
+// Decorative-only ruler for "quarter"/"eighth": a fixed 4-way reference
+// grid, independent of the session's own subdivision, purely so those
+// modes have *some* finer visual guide between the numbered quarters —
+// neither mode actually evaluates onsets at these exact points (eighth
+// evaluates only its single levare; quarter none at all).
 const SIXTEENTH_TICK_COLOR = "rgba(255,255,255,0.16)";
-// The triplet's 2 off-beat notes ("triplet" mode only, sub-beats 1 and 2 —
-// never the quarter/battere itself) — full-height like the quarter tick so
-// they still read as real rhythmic positions, just dimmer/thinner.
-// Deliberately more visible than SIXTEENTH_TICK_COLOR: unlike that fixed
-// unlabeled ruler, these are real triplet subdivisions of the session that
-// was actually recorded.
-const TRIPLET_SECONDARY_TICK_COLOR = "rgba(255,255,255,0.3)";
+// The off-beat sub-beats of a subdivision that draws its own real grid
+// ("triplet" and "sixteenth" — see hasSubdivisionGrid below), i.e.
+// everything but sub-beat 0 (the quarter/battere). Full-height like the
+// quarter tick so they still read as real rhythmic positions, just
+// dimmer/thinner. Deliberately more visible than SIXTEENTH_TICK_COLOR:
+// unlike that fixed decorative ruler, these are real onset-capture
+// positions of the session that was actually recorded.
+const SUBDIVISION_SECONDARY_TICK_COLOR = "rgba(255,255,255,0.3)";
 const WAVEFORM_FILL_COLOR = "rgba(255,138,128,0.35)";
 
 // One line per accepted onset, on-time or not — the chips/stat counts in
@@ -54,13 +60,13 @@ type BarRow = {
   waveformPath: SkPath;
   quarterTickPath: SkPath;
   sixteenthTickPath: SkPath;
-  // Only populated when summary.subdivision is "triplet" — the two
-  // off-beat triplet notes (sub-beats 1 and 2) of each quarter, always
-  // secondary regardless of which one is the session's evaluated
-  // TripletTarget (see the isTriplet branch below). Stays an empty path
-  // (renders nothing) for every other subdivision, so it's always safe to
-  // include in the Canvas below.
-  tripletSecondaryTickPath: SkPath;
+  // Only populated for subdivisions with their own real grid ("triplet",
+  // "sixteenth" — see hasSubdivisionGrid below): every sub-beat but 0 (the
+  // quarter/battere) of each quarter, always secondary — for "triplet"
+  // regardless of which off-beat note is the session's evaluated
+  // TripletTarget. Stays an empty path (renders nothing) for "quarter"/
+  // "eighth", so it's always safe to include in the Canvas below.
+  subdivisionSecondaryTickPath: SkPath;
   barlinePath: SkPath;
   onsetPath: SkPath;
   quarterLabels: { x: number; label: string }[];
@@ -72,7 +78,13 @@ type DebugChartProps = {
 
 export default function DebugChart({ summary }: DebugChartProps) {
   const [width, setWidth] = useState(0);
-  const isTriplet = summary.subdivision === "triplet";
+  // "triplet" and "sixteenth" both evaluate every one of their sub-beats
+  // (see evaluatedSubBeats in lib/rhythm-detection.ts) and get their own
+  // precise per-quarter grid below; "quarter"/"eighth" fall back to the
+  // fixed decorative 4-way ruler (SIXTEENTH_TICK_COLOR) instead, since
+  // most of those positions aren't actually evaluated for them.
+  const hasSubdivisionGrid =
+    summary.subdivision === "triplet" || summary.subdivision === "sixteenth";
 
   const beatIntervalMs = 60000 / summary.bpm;
   const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
@@ -160,30 +172,31 @@ export default function DebugChart({ summary }: DebugChartProps) {
 
       const quarterTickPath = Skia.Path.Make();
       const sixteenthTickPath = Skia.Path.Make();
-      const tripletSecondaryTickPath = Skia.Path.Make();
+      const subdivisionSecondaryTickPath = Skia.Path.Make();
       const barlinePath = Skia.Path.Make();
       const quarterLabels: { x: number; label: string }[] = [];
 
-      // "triplet" gets its own branch: instead of one tick per quarter plus
-      // a subdivision-agnostic 16th ruler, draw all 3 real triplet
-      // positions of every quarter. Prominence here tracks rhythmic
-      // *structure*, not which note is being evaluated: sub-beat 0 (the
-      // quarter's own battere — always the first of the 3 points generated,
-      // by construction of the `sub * subIntervalMs` formula below) gets
-      // the exact same standard white tick + numbered label every other
-      // subdivision already uses; for q === 0 that position is also the
-      // true start of the bar, which barlinePath below independently
-      // stamps with its own heavier marker, so the very first line of the
-      // bar reads as the most prominent one without extra styling here.
-      // Sub-beats 1 and 2 (the triplet's two off-beat notes) always get the
-      // dimmer/thinner secondary treatment, regardless of which one is
-      // this session's evaluated TripletTarget — which one actually got
-      // judged is shown by the red onset line, not by grid emphasis.
+      // "triplet"/"sixteenth" get their own branch: instead of one tick per
+      // quarter plus the decorative subdivision-agnostic ruler, draw every
+      // real sub-beat position of every quarter. Prominence here tracks
+      // rhythmic *structure*, not which sub-beat is being evaluated:
+      // sub-beat 0 (the quarter's own battere — always the first point
+      // generated, by construction of the `sub * subIntervalMs` formula
+      // below) gets the exact same standard white tick + numbered label
+      // every other subdivision already uses; for q === 0 that position is
+      // also the true start of the bar, which barlinePath below
+      // independently stamps with its own heavier marker, so the very
+      // first line of the bar reads as the most prominent one without
+      // extra styling here. Every other sub-beat always gets the
+      // dimmer/thinner secondary treatment — for "triplet" that's true
+      // regardless of which off-beat note is this session's evaluated
+      // TripletTarget; which one actually got judged is shown by the red
+      // onset line, not by grid emphasis.
       for (let q = 0; q < BEATS_PER_BAR; q++) {
         const quarterTime = nominalStart + q * beatIntervalMs;
 
-        if (isTriplet) {
-          const steps = SUBDIVISION_STEPS.triplet;
+        if (hasSubdivisionGrid) {
+          const steps = SUBDIVISION_STEPS[summary.subdivision];
           const subIntervalMs = beatIntervalMs / steps;
           for (let sub = 0; sub < steps; sub++) {
             const subX =
@@ -193,8 +206,8 @@ export default function DebugChart({ summary }: DebugChartProps) {
               quarterTickPath.lineTo(subX, TOP_LABEL_LANE + CHART_HEIGHT);
               quarterLabels.push({ x: subX, label: String(q + 1) });
             } else {
-              tripletSecondaryTickPath.moveTo(subX, TOP_LABEL_LANE);
-              tripletSecondaryTickPath.lineTo(subX, TOP_LABEL_LANE + CHART_HEIGHT);
+              subdivisionSecondaryTickPath.moveTo(subX, TOP_LABEL_LANE);
+              subdivisionSecondaryTickPath.lineTo(subX, TOP_LABEL_LANE + CHART_HEIGHT);
             }
           }
           continue;
@@ -240,7 +253,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
         waveformPath,
         quarterTickPath,
         sixteenthTickPath,
-        tripletSecondaryTickPath,
+        subdivisionSecondaryTickPath,
         barlinePath,
         onsetPath,
         quarterLabels,
@@ -262,17 +275,23 @@ export default function DebugChart({ summary }: DebugChartProps) {
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        {isTriplet
+        {summary.subdivision === "triplet"
           ? "Le righe bianche numerate segnano i quarti (il battere), le righe più sottili le due suddivisioni della terzina. La linea rossa piena è il picco rilevato dal microfono."
-          : "Le righe bianche numerate segnano i quarti, le lineette corte i sedicesimi. La linea rossa piena è il picco rilevato dal microfono."}
+          : summary.subdivision === "sixteenth"
+            ? "Le righe bianche numerate segnano i quarti (il battere), le righe più sottili i tre sedicesimi interni. La linea rossa piena è il picco rilevato dal microfono."
+            : "Le righe bianche numerate segnano i quarti, le lineette corte i sedicesimi. La linea rossa piena è il picco rilevato dal microfono."}
       </Text>
 
       <View className="flex-row flex-wrap gap-x-3 gap-y-1">
         <LegendLine color={QUARTER_TICK_COLOR} label="quarto" />
-        {isTriplet && (
+        {hasSubdivisionGrid && (
           <LegendLine
-            color={TRIPLET_SECONDARY_TICK_COLOR}
-            label="suddivisioni terzina"
+            color={SUBDIVISION_SECONDARY_TICK_COLOR}
+            label={
+              summary.subdivision === "triplet"
+                ? "suddivisioni terzina"
+                : "sedicesimi interni"
+            }
           />
         )}
         <LegendLine color={ONSET_LINE_COLOR} label="colpo" />
@@ -288,7 +307,7 @@ export default function DebugChart({ summary }: DebugChartProps) {
               <Canvas style={{ width, height: CHART_TOTAL_HEIGHT }}>
                 <Path path={row.waveformPath} color={WAVEFORM_FILL_COLOR} style="fill" />
                 <Path path={row.sixteenthTickPath} color={SIXTEENTH_TICK_COLOR} style="stroke" strokeWidth={1} />
-                <Path path={row.tripletSecondaryTickPath} color={TRIPLET_SECONDARY_TICK_COLOR} style="stroke" strokeWidth={1} />
+                <Path path={row.subdivisionSecondaryTickPath} color={SUBDIVISION_SECONDARY_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.quarterTickPath} color={QUARTER_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.barlinePath} color={BARLINE_COLOR} style="stroke" strokeWidth={2} />
                 <Path path={row.onsetPath} color={ONSET_LINE_COLOR} style="stroke" strokeWidth={2} />

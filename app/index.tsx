@@ -6,6 +6,7 @@ import SessionSetup, { GlowDivider } from "@/components/session-setup";
 import SyncRecorder, {
   type OnsetStatus,
   type SessionSummary,
+  type SixteenthTarget,
   type Subdivision,
   type TripletTarget,
 } from "@/components/sync-recorder";
@@ -239,6 +240,56 @@ function TempoRuler({
   );
 }
 
+// Which off-beat sub-beat to evaluate — shared between "triplet" (2/3) and
+// "sixteenth" (2/3/4). The 1st note always coincides with the
+// quarter/battere, so it's never a selectable option for either (see
+// TripletTarget/SixteenthTarget).
+function TargetPicker<T extends number>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: readonly T[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <View className="flex-row items-center justify-center gap-3">
+      <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+        {label}
+      </Text>
+      <View className="flex-row gap-2">
+        {options.map((n) => {
+          const selected = value === n;
+          return (
+            <Pressable
+              key={n}
+              onPress={() => onChange(n)}
+              className="w-9 h-9 rounded-lg items-center justify-center active:opacity-70"
+              style={{
+                borderWidth: 2,
+                borderColor: selected ? ACCENT_COLOR : "rgba(255,255,255,0.25)",
+                backgroundColor: selected
+                  ? "rgba(255,59,48,0.15)"
+                  : "transparent",
+              }}
+            >
+              <Text
+                className="text-sm font-bold"
+                style={{ color: selected ? ACCENT_COLOR : "#F2F2F7" }}
+              >
+                {n}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export default function Home() {
   const [bpm, setBpm] = useState(120);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -261,6 +312,8 @@ export default function Home() {
   // setupSubdivision is "triplet". Chosen on the recording screen itself,
   // not the setup step (see the picker below, gated to phase === "idle").
   const [tripletTarget, setTripletTarget] = useState<TripletTarget>(2);
+  // Same idea as tripletTarget, for "sixteenth" (2nd/3rd/4th sixteenth note).
+  const [sixteenthTarget, setSixteenthTarget] = useState<SixteenthTarget>(2);
   const [toleranceMs, setToleranceMs] = useState(DEFAULT_TOLERANCE_MS);
 
   const phaseRef = useRef<Phase>("idle");
@@ -488,46 +541,29 @@ export default function Home() {
             bpm={bpm}
             subdivision={setupSubdivision}
             tripletTarget={tripletTarget}
+            sixteenthTarget={sixteenthTarget}
           />
         )}
 
-        {/* Which triplet note to evaluate — only meaningful for "triplet",
-            and only changeable before Start (the count-in/recording
-            locks it in, same as bars/tempo on the setup screen). The
-            1st note always coincides with the quarter/battere, so it's
-            never a selectable target — only "2"/"3" (see TripletTarget). */}
+        {/* Which off-beat note to evaluate — only meaningful for
+            "triplet"/"sixteenth", and only changeable before Start (the
+            count-in/recording locks it in, same as bars/tempo on the setup
+            screen). See TargetPicker. */}
         {setupSubdivision === "triplet" && phase === "idle" && (
-          <View className="flex-row items-center justify-center gap-3">
-            <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-              Nota da valutare
-            </Text>
-            <View className="flex-row gap-2">
-              {([2, 3] as const).map((n) => {
-                const selected = tripletTarget === n;
-                return (
-                  <Pressable
-                    key={n}
-                    onPress={() => setTripletTarget(n)}
-                    className="w-9 h-9 rounded-lg items-center justify-center active:opacity-70"
-                    style={{
-                      borderWidth: 2,
-                      borderColor: selected ? ACCENT_COLOR : "rgba(255,255,255,0.25)",
-                      backgroundColor: selected
-                        ? "rgba(255,59,48,0.15)"
-                        : "transparent",
-                    }}
-                  >
-                    <Text
-                      className="text-sm font-bold"
-                      style={{ color: selected ? ACCENT_COLOR : "#F2F2F7" }}
-                    >
-                      {n}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
+          <TargetPicker
+            label="Nota da valutare"
+            options={[2, 3] as const}
+            value={tripletTarget}
+            onChange={setTripletTarget}
+          />
+        )}
+        {setupSubdivision === "sixteenth" && phase === "idle" && (
+          <TargetPicker
+            label="Nota da valutare"
+            options={[2, 3, 4] as const}
+            value={sixteenthTarget}
+            onChange={setSixteenthTarget}
+          />
         )}
 
         {phase === "idle" && (
@@ -556,6 +592,7 @@ export default function Home() {
           bpm={bpm}
           subdivision={setupSubdivision}
           tripletTarget={tripletTarget}
+          sixteenthTarget={sixteenthTarget}
           toleranceMs={toleranceMs}
           maxBars={setupBars}
           onSessionEnd={handleSessionEnd}

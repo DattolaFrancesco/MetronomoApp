@@ -18,10 +18,6 @@ const ITEM_WIDTH_RATIO = 0.32;
 
 const BARS_OPTIONS = [1, 2, 3, 4] as const;
 
-// Only "sixteenth" is still not wired to the real detection engine (see
-// sync-recorder.tsx/beat-indicator.tsx) — stays visible but disabled until
-// validated on-device, so there's nothing left to build here when we
-// unlock it (just remove `disabled`).
 const TEMPO_OPTIONS: {
   key: Subdivision;
   label: string;
@@ -30,7 +26,7 @@ const TEMPO_OPTIONS: {
   { key: "quarter", label: "Quarti" },
   { key: "eighth", label: "Ottavi" },
   { key: "triplet", label: "Terzine" },
-  { key: "sixteenth", label: "Quartine", disabled: true },
+  { key: "sixteenth", label: "Quartine" },
 ];
 
 type CarouselProps<T> = {

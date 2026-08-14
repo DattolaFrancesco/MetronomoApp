@@ -12,10 +12,7 @@
 // purposes. The native engine only ever fires onBeat once per quarter, so
 // every subdivision beyond "quarter" is purely a JS-side windowing scheme:
 // each onBeat opens `steps` evenly-spaced capture windows across that one
-// quarter's interval instead of just one. Only "quarter" and "eighth" are
-// wired up and selectable in the setup screen for now — "triplet" and
-// "sixteenth" are defined here already since the mechanism is identical for
-// any step count, but stay disabled in the UI until validated on-device.
+// quarter's interval instead of just one.
 export type Subdivision = "quarter" | "eighth" | "triplet" | "sixteenth";
 
 // Which of the triplet's two off-beat notes (the 2nd or 3rd note of the
@@ -24,6 +21,13 @@ export type Subdivision = "quarter" | "eighth" | "triplet" | "sixteenth";
 // Irrelevant for every other subdivision. 1-indexed as shown to the user
 // ("2" / "3"); internally that's sub-beat index 1 or 2 (0 = the quarter).
 export type TripletTarget = 2 | 3;
+
+// Same idea as TripletTarget, for "sixteenth": which of the 2nd/3rd/4th
+// sixteenth note is evaluated — the 1st always coincides with the
+// quarter/battere, so (like TripletTarget) it's never a selectable target.
+// Irrelevant for every other subdivision. 1-indexed as shown to the user;
+// internally that's sub-beat index 1, 2, or 3 (0 = the quarter).
+export type SixteenthTarget = 2 | 3 | 4;
 
 export type OnsetStatus = "onTime" | "early" | "late";
 
@@ -105,6 +109,10 @@ export type SessionSummary = {
   // meaningless when subdivision isn't "triplet", but always present so
   // consumers don't need to special-case its absence.
   tripletTarget: TripletTarget;
+  // Which sixteenth note was the evaluation target (see SixteenthTarget) —
+  // meaningless when subdivision isn't "sixteenth", but always present for
+  // the same reason as tripletTarget above.
+  sixteenthTarget: SixteenthTarget;
   // Decimated amplitude history for the whole session, one entry per
   // WAVEFORM_SAMPLE_INTERVAL_MS bucket, for drawing the static full-session
   // waveform in the report. Index i covers [i, i+1) * WAVEFORM_SAMPLE_INTERVAL_MS
@@ -201,17 +209,18 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 // Which sub-beat indices within each quarter actually get an onset-capture
-// window opened. For "quarter" and "sixteenth" this is simply every step
-// (0..steps-1). "eighth" and "triplet" are deliberate exceptions: only a
-// single chosen off-beat is evaluated — the quarter itself (sub-beat 0,
-// "il battere") is skipped entirely, so it never becomes an
-// accepted/rejected onset anywhere (report, debug chart). For "eighth" that
-// off-beat is fixed (there's only one, "il levare", sub-beat 1); for
-// "triplet" it's whichever of the two off-beat notes the user picked on the
-// recording screen (see TripletTarget).
+// window opened. "quarter" is the only case that means the native beat
+// itself. "eighth", "triplet" and "sixteenth" all evaluate exactly one
+// chosen off-beat — the quarter itself (sub-beat 0, "il battere") is
+// skipped entirely, so it never becomes an accepted/rejected onset anywhere
+// (report, debug chart). For "eighth" that off-beat is fixed (there's only
+// one, "il levare", sub-beat 1); for "triplet"/"sixteenth" it's whichever
+// off-beat note the user picked on the recording screen (see
+// TripletTarget/SixteenthTarget).
 export function evaluatedSubBeats(
   subdivision: Subdivision,
   tripletTarget: TripletTarget,
+  sixteenthTarget: SixteenthTarget,
 ): number[] {
   switch (subdivision) {
     case "quarter":
@@ -221,20 +230,24 @@ export function evaluatedSubBeats(
     case "triplet":
       return [tripletTarget - 1];
     case "sixteenth":
-      return [0, 1, 2, 3];
+      return [sixteenthTarget - 1];
   }
 }
 
 // Which sub-beat is the "primary" (prominent, glowing) marker in
-// beat-indicator.tsx. For "quarter" and "sixteenth" this is the native
-// quarter itself. "eighth" and "triplet" are exceptions, matching
+// beat-indicator.tsx. For "quarter" this is the native quarter itself.
+// "eighth", "triplet" and "sixteenth" are exceptions, matching
 // evaluatedSubBeats above: since only the chosen off-beat is actually
 // judged by peak detection, it's that off-beat that's drawn prominent — the
-// quarter (and, for triplets, the other off-beat note) stay visible, just
-// demoted to the secondary/outline style.
+// quarter (and, for triplet/sixteenth, the other off-beat notes) stay
+// visible, just demoted to the secondary/outline style. NOT used by
+// debug-chart.tsx's static report grid, which deliberately keeps the
+// quarter/battere itself as the prominent structural reference regardless
+// of the chosen target — see the hasSubdivisionGrid branch there.
 export function primarySubBeat(
   subdivision: Subdivision,
   tripletTarget: TripletTarget,
+  sixteenthTarget: SixteenthTarget,
 ): number {
   switch (subdivision) {
     case "quarter":
@@ -244,7 +257,7 @@ export function primarySubBeat(
     case "triplet":
       return tripletTarget - 1;
     case "sixteenth":
-      return 0;
+      return sixteenthTarget - 1;
   }
 }
 
@@ -294,12 +307,13 @@ export function computeExpectedHits(
   bpm: number,
   subdivision: Subdivision,
   tripletTarget: TripletTarget,
+  sixteenthTarget: SixteenthTarget,
   totalQuarters: number,
 ): ExpectedHit[] {
   const beatIntervalMs = 60000 / bpm;
   const steps = SUBDIVISION_STEPS[subdivision];
   const subIntervalMs = beatIntervalMs / steps;
-  const evaluated = evaluatedSubBeats(subdivision, tripletTarget);
+  const evaluated = evaluatedSubBeats(subdivision, tripletTarget, sixteenthTarget);
 
   const hits: ExpectedHit[] = [];
   for (let i = 0; i < totalQuarters; i++) {
@@ -465,6 +479,7 @@ export function analyzeSession(
   bpm: number,
   subdivision: Subdivision,
   tripletTarget: TripletTarget,
+  sixteenthTarget: SixteenthTarget,
   toleranceMs: number,
   maxBars: number | undefined,
   leadInMs = 0,
@@ -489,16 +504,12 @@ export function analyzeSession(
   const riseByBucket = computeOnsetRise(waveform);
   const onsetPeaks = riseByBucket.map((rise) => rise >= MIN_ONSET_RISE);
 
-  const steps = SUBDIVISION_STEPS[subdivision];
-  const subIntervalMs = beatIntervalMs / steps;
-  const evaluated = evaluatedSubBeats(subdivision, tripletTarget);
-  // How far apart consecutive evaluated positions actually are: every
-  // sub-beat for "sixteenth" (subIntervalMs apart), or the same single
-  // chosen position recurring once per beat for everything else — the
-  // bars searched near one point of interest never reach past halfway to
-  // the neighboring one.
-  const matchRadius =
-    (evaluated.length === steps ? subIntervalMs : beatIntervalMs) / 2;
+  // Every subdivision now evaluates exactly one sub-beat position per
+  // quarter (see evaluatedSubBeats) — that single chosen position recurs
+  // once per beat, so the search radius is always half the beat interval;
+  // the bars searched near one point of interest never reach past halfway
+  // to the neighboring one.
+  const matchRadius = beatIntervalMs / 2;
 
   // The number of real quarters the metronome actually played. When
   // maxBars is known (always, in practice — the setup screen requires
@@ -519,6 +530,7 @@ export function analyzeSession(
     bpm,
     subdivision,
     tripletTarget,
+    sixteenthTarget,
     totalQuarters,
   ).filter((hit) => hit.time <= durationMs + beatIntervalMs);
 
@@ -526,9 +538,9 @@ export function analyzeSession(
   // A bucket already credited to one point of interest can't also be
   // "the peak" for a neighboring one — without this, two adjacent targets
   // whose search windows touch at the boundary (e.g. two consecutive
-  // sixteenth notes) can both independently land on the exact same real
-  // peak and each report it as their own hit, drawing two onset lines for
-  // what was actually a single hit.
+  // quarters at a very fast tempo) can both independently land on the
+  // exact same real peak and each report it as their own hit, drawing two
+  // onset lines for what was actually a single hit.
   const claimedBuckets = new Set<number>();
 
   for (const hit of expectedHits) {
