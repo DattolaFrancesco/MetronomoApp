@@ -23,10 +23,10 @@ const TEMPO_OPTIONS: {
   label: string;
   disabled?: boolean;
 }[] = [
-  { key: "quarter", label: "Quarti" },
-  { key: "eighth", label: "Ottavi" },
-  { key: "triplet", label: "Terzine" },
-  { key: "sixteenth", label: "Quartine" },
+  { key: "quarter", label: "Quarters" },
+  { key: "eighth", label: "Eighths" },
+  { key: "triplet", label: "Triplets" },
+  { key: "sixteenth", label: "Sixteenths" },
 ];
 
 type CarouselProps<T> = {
@@ -159,7 +159,7 @@ function Carousel<T>({
 }
 
 // Thin horizontal line fading out at both ends, with a soft red bloom
-// (iOS-only shadow blur) — separates the Battute/Tempo sections without a
+// (iOS-only shadow blur) — separates the Bars/Tempo sections without a
 // hard, flat divider.
 export function GlowDivider() {
   return (

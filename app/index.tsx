@@ -32,9 +32,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 const ACCENT_COLOR = "#FF3B30";
 const COUNT_IN_BEATS = 4;
 
-// Single-word subdivision label for the recording screen's header — the
-// recording screen is in English; the setup screen's Tempo carousel (see
-// components/session-setup.tsx's TEMPO_OPTIONS) stays in Italian.
+// Single-word subdivision label for the recording screen's header — kept
+// separate from the setup screen's Tempo carousel (see
+// components/session-setup.tsx's TEMPO_OPTIONS), which uses its own labels.
 const SUBDIVISION_LABELS: Record<Subdivision, string> = {
   quarter: "Quarters",
   eighth: "Eighths",
@@ -283,7 +283,11 @@ export default function Home() {
       await stop();
       setPhase("idle");
       setCountInBeat(null);
-      setShowSetup(true);
+      // Deliberately doesn't go back to setup here — if the session that
+      // just ended produced a report, `report` (checked before showSetup
+      // below) takes over the screen; if no audio was detected, staying on
+      // this recording screen keeps bars/subdivision/BPM as they are so the
+      // user can immediately retry instead of being bounced back to setup.
     } else {
       setReport(null);
       setSyncStatus(null);
@@ -323,7 +327,8 @@ export default function Home() {
     stop();
     setPhase("idle");
     setCountInBeat(null);
-    setShowSetup(true);
+    // Same reasoning as the manual Stop path in togglePlay above — stay on
+    // the recording screen unless a report actually comes back.
   };
 
   const applyBpm = (newBpm: number) => {

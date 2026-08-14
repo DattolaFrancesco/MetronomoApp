@@ -234,7 +234,7 @@ describe("pickPeakInRange — minimum volume threshold", () => {
   });
 });
 
-describe("classifyOnset — anticipo/a tempo/ritardo classification", () => {
+describe("classifyOnset — early/on-time/late classification", () => {
   const TOLERANCE_MS = 90;
 
   test("exactly at the tolerance boundary counts as onTime", () => {

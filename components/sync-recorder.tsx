@@ -48,7 +48,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 // All the pure rhythm/onset-detection math (expected timestamps, peak
-// selection, the rise/derivative onset criterion, anticipo/a tempo/ritardo
+// selection, the rise/derivative onset criterion, early/on-time/late
 // classification, click gating) lives in lib/rhythm-detection.ts, unit
 // tested there — this component only re-exports what other files under
 // components/ and app/ still import from here, and wires that pure logic up
@@ -845,8 +845,8 @@ export default function SyncRecorder({
           className="items-center justify-center"
         >
           <Text className="text-white text-center text-sm px-4">
-            Microfono non autorizzato. Abilita l&apos;accesso dalle impostazioni
-            per vedere la sincronizzazione.
+            Microphone not authorized. Enable access in settings to see the
+            sync.
           </Text>
         </View>
       ) : (

@@ -10,7 +10,7 @@ import { Text, View } from "react-native";
 
 // Dev/QA-only companion to DebugChart: one row per expected hit (matched or
 // not), showing the raw numbers behind the accept/reject decision — same
-// "picco più forte trovato + risalita" read the chart itself can't spell
+// "strongest peak found + rise" read the chart itself can't spell
 // out. Exists so a missed hit's *cause* (too quiet vs no real rise vs
 // nothing there) is visible without re-deriving it from the waveform by eye.
 
@@ -19,9 +19,9 @@ const MISS_COLOR = "#FF3B30";
 const DIM_COLOR = "rgba(255,255,255,0.35)";
 
 const STATUS_LABEL: Record<string, string> = {
-  onTime: "A TEMPO",
-  early: "ANTICIPO",
-  late: "RITARDO",
+  onTime: "ON TIME",
+  early: "EARLY",
+  late: "LATE",
 };
 
 // Same beat-subdivision labeling convention used by session-report's event
@@ -52,9 +52,9 @@ export default function DebugHitTable({ summary }: DebugHitTableProps) {
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        Per ogni quarto: esito, il picco più forte trovato nella finestra di
-        ascolto e quanto è risalito dal minimo precedente — confrontati con
-        le soglie minime (ampiezza {MIN_PEAK_AMPLITUDE.toFixed(2)}, risalita{" "}
+        For each quarter: outcome, the strongest peak found in the listening
+        window, and how much it rose from the preceding minimum — compared
+        against the minimum thresholds (amplitude {MIN_PEAK_AMPLITUDE.toFixed(2)}, rise{" "}
         {MIN_ONSET_RISE.toFixed(2)}).
       </Text>
 
@@ -72,7 +72,7 @@ export default function DebugHitTable({ summary }: DebugHitTableProps) {
             <View key={`${hit.beatIndex}-${hit.subBeatIndex}-${i}`}>
               {showBarHeader && (
                 <Text className="text-white text-[10px] font-bold uppercase tracking-widest mt-1 mb-0.5">
-                  Battuta {barNumber}
+                  Bar {barNumber}
                 </Text>
               )}
               <View
@@ -98,18 +98,18 @@ export default function DebugHitTable({ summary }: DebugHitTableProps) {
                 >
                   {hit.matched
                     ? `${STATUS_LABEL[hit.status!]} (${hit.deltaMs! > 0 ? "+" : ""}${Math.round(hit.deltaMs!)}ms)`
-                    : "NON RILEVATO"}
+                    : "NOT DETECTED"}
                 </Text>
 
                 <Text className="text-[10px]" style={{ color: DIM_COLOR }}>
-                  picco{" "}
+                  peak{" "}
                   <Text style={{ color: hit.passedAmplitude ? OK_COLOR : MISS_COLOR }}>
                     {fmtAmp(hit.candidateAmplitude)}
                   </Text>
                 </Text>
 
                 <Text className="text-[10px]" style={{ color: DIM_COLOR }}>
-                  risalita{" "}
+                  rise{" "}
                   <Text style={{ color: hit.passedRise ? OK_COLOR : MISS_COLOR }}>
                     {fmtAmp(hit.candidateRise)}
                   </Text>

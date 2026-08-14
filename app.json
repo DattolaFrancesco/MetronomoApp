@@ -50,7 +50,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Consenti a Metronomo di accedere al microfono per confrontare il tuo tempo con quello del metronomo."
+          "microphonePermission": "Allow Timing to access the microphone to compare your timing against the metronome."
         }
       ],
       "expo-font",

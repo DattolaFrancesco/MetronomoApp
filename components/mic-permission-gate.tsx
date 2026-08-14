@@ -61,11 +61,11 @@ export default function MicPermissionGate({ onGranted }: Props) {
   return (
     <View className="flex-1 items-center justify-center gap-6 px-2">
       <Text className="text-white text-lg font-extrabold tracking-widest text-center">
-        Accesso al microfono richiesto
+        Microphone access required
       </Text>
       <Text className="text-white/60 text-center leading-5">
-        Metronomo confronta il tuo tempo con quello del metronomo tramite il
-        microfono. Devi acconsentire l&apos;accesso per continuare.
+        Timing compares your timing against the metronome using the
+        microphone. You need to grant access to continue.
       </Text>
       <Pressable
         onPress={handlePress}
@@ -87,7 +87,7 @@ export default function MicPermissionGate({ onGranted }: Props) {
             textShadowOffset: { width: 0, height: 0 },
           }}
         >
-          {canAskAgain ? "Consenti accesso" : "Apri impostazioni"}
+          {canAskAgain ? "Allow access" : "Open settings"}
         </Text>
       </Pressable>
     </View>

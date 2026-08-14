@@ -14,9 +14,9 @@ const ACCENT_COLOR = "#FF3B30";
 const DIM_COLOR = "rgba(255,255,255,0.35)";
 
 const STATUS_META: Record<OnsetStatus, { label: string }> = {
-  onTime: { label: "A TEMPO" },
-  early: { label: "ANTICIPO" },
-  late: { label: "RITARDO" },
+  onTime: { label: "ON TIME" },
+  early: { label: "EARLY" },
+  late: { label: "LATE" },
 };
 
 // A zero count is de-emphasized (dim grey) regardless of category; a
@@ -88,7 +88,7 @@ function EventChip({
 
 type SessionReportProps = {
   summary: SessionSummary;
-  // Both the top-left back arrow and the bottom "Nuova sessione" button
+  // Both the top-left back arrow and the bottom "New session" button
   // call this — same destination (the metronome/recording screen, see
   // app/index.tsx), just two different affordances for reaching it.
   onNewSession: () => void;
@@ -141,19 +141,19 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
           className="text-center text-lg font-extrabold uppercase tracking-[3px]"
           style={{ color: ACCENT_COLOR }}
         >
-          Report sessione
+          Session report
         </Text>
 
         <View style={{ height: 1, backgroundColor: "rgba(255,255,255,0.12)" }} />
 
         <DarkPanel className="px-4 py-5 gap-4 w-full items-center">
           <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-            Risultato
+            Result
           </Text>
 
           {total === 0 ? (
             <Text className="text-white/70 text-sm text-center px-4">
-              Nessun colpo rilevato in questa sessione.
+              No hits detected in this session.
             </Text>
           ) : (
             <>
@@ -169,7 +169,7 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
                 {accuracy}%
               </Text>
               <Text className="text-white/60 text-xs font-semibold">
-                {onTimeCount} su {total} colpi a tempo
+                {onTimeCount} of {total} hits on time
               </Text>
 
               <View className="flex-row justify-center gap-8 mt-1">
@@ -204,7 +204,7 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
             className="text-[11px] font-bold uppercase tracking-[2px]"
             style={{ color: ACCENT_COLOR }}
           >
-            Debug / Dati tecnici
+            Debug / Technical data
           </Text>
           <DebugChart summary={summary} />
         </DarkPanel>
@@ -229,7 +229,7 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
               textShadowOffset: { width: 0, height: 0 },
             }}
           >
-            Nuova sessione
+            New session
           </Text>
         </Pressable>
       </ScrollView>

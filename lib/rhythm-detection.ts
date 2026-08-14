@@ -520,7 +520,7 @@ export function analyzeSession(
   // used to round up to one phantom extra quarter that was never actually
   // played — if any residual sound (the last real hit's own decay tail,
   // room noise) fell inside that phantom quarter's search window, it
-  // surfaced as a spurious extra event (e.g. "5 colpi" for 4 real beats).
+  // surfaced as a spurious extra event (e.g. "5 hits" for 4 real beats).
   const totalQuarters =
     maxBars != null
       ? maxBars * BEATS_PER_BAR

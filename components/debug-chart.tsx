@@ -276,32 +276,32 @@ export default function DebugChart({ summary }: DebugChartProps) {
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
         {summary.subdivision === "triplet"
-          ? "Le righe bianche numerate segnano i quarti (il battere), le righe più sottili le due suddivisioni della terzina. La linea rossa piena è il picco rilevato dal microfono."
+          ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. The solid red line is the peak detected by the microphone."
           : summary.subdivision === "sixteenth"
-            ? "Le righe bianche numerate segnano i quarti (il battere), le righe più sottili i tre sedicesimi interni. La linea rossa piena è il picco rilevato dal microfono."
-            : "Le righe bianche numerate segnano i quarti, le lineette corte i sedicesimi. La linea rossa piena è il picco rilevato dal microfono."}
+            ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. The solid red line is the peak detected by the microphone."
+            : "The numbered white lines mark the quarters, the short dashes the sixteenths. The solid red line is the peak detected by the microphone."}
       </Text>
 
       <View className="flex-row flex-wrap gap-x-3 gap-y-1">
-        <LegendLine color={QUARTER_TICK_COLOR} label="quarto" />
+        <LegendLine color={QUARTER_TICK_COLOR} label="quarter" />
         {hasSubdivisionGrid && (
           <LegendLine
             color={SUBDIVISION_SECONDARY_TICK_COLOR}
             label={
               summary.subdivision === "triplet"
-                ? "suddivisioni terzina"
-                : "sedicesimi interni"
+                ? "triplet subdivisions"
+                : "inner sixteenths"
             }
           />
         )}
-        <LegendLine color={ONSET_LINE_COLOR} label="colpo" />
+        <LegendLine color={ONSET_LINE_COLOR} label="hit" />
       </View>
 
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
         {rows.map((row) => (
           <View key={row.barNumber} style={{ marginBottom: ROW_GAP }}>
             <Text className="text-white text-[10px] font-bold uppercase tracking-widest mb-1">
-              Battuta {row.barNumber}
+              Bar {row.barNumber}
             </Text>
             <View style={{ width, height: CHART_TOTAL_HEIGHT }}>
               <Canvas style={{ width, height: CHART_TOTAL_HEIGHT }}>

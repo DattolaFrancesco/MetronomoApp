@@ -45,9 +45,9 @@ const COUNT_IN_BEATS = 4;
 type Phase = "idle" | "countIn" | "recording";
 
 const DIFFICULTY_LABEL: Record<ChallengeDifficulty, string> = {
-  facile: "Facile",
-  medio: "Medio",
-  difficile: "Difficile",
+  facile: "Easy",
+  medio: "Medium",
+  difficile: "Hard",
   expert: "Expert",
 };
 const DIFFICULTY_COLOR: Record<ChallengeDifficulty, string> = {
@@ -320,7 +320,7 @@ function ChallengeSession({
           paddingBottom: insets.bottom + 24,
         }}
       >
-        <View style={{ height: 40, justifyContent: "center" }}>
+        <View style={{ minHeight: 40, justifyContent: "center", paddingHorizontal: 48 }}>
           <Pressable
             onPress={handleBack}
             className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
@@ -334,9 +334,15 @@ function ChallengeSession({
           >
             <Text className="text-white text-lg">←</Text>
           </Pressable>
+          {/* Challenge names vary a lot in length (e.g. "Downbeat → Upbeat
+              → 3rd Triplet") — wraps up to 2 lines and shrinks itself
+              rather than overflowing past the screen edge or the back
+              button. */}
           <Text
-            className="text-center text-lg font-extrabold uppercase tracking-[3px]"
+            className="text-center text-base font-extrabold uppercase tracking-[2px]"
             style={{ color: ACCENT_COLOR }}
+            numberOfLines={2}
+            adjustsFontSizeToFit
           >
             {challenge.name}
           </Text>
@@ -475,22 +481,17 @@ function ChallengeReport({
         <DarkPanel className="px-4 py-6 gap-3 w-full items-center">
           <Text
             className="text-4xl font-bold text-center"
-            style={{
-              color,
-              textShadowColor: color,
-              textShadowRadius: 20,
-              textShadowOffset: { width: 0, height: 0 },
-            }}
+            style={{ color }}
           >
-            {result.passed ? "Sei un grande! 🔥" : "Sfigato! 😅"}
+            {result.passed ? "You crushed it!" : "Not quite!"}
           </Text>
           <Text className="text-white/60 text-sm text-center">
             {result.passed
-              ? "Tutti e 8 i colpi erano a tempo."
-              : "Non tutti i colpi erano a tempo — riprova!"}
+              ? "All 8 hits were on time."
+              : "Not all hits were on time — try again!"}
           </Text>
           <Text className="text-white/40 text-xs font-semibold mt-1">
-            {onTimeCount} su {result.hits.length} a tempo
+            {onTimeCount} of {result.hits.length} on time
           </Text>
         </DarkPanel>
 
@@ -521,7 +522,7 @@ function ChallengeReport({
         </View>
 
         <Pressable
-          onPress={onRetry}
+          onPress={result.passed ? onExit : onRetry}
           className="self-stretch py-5 rounded-2xl items-center active:opacity-70 border-2"
           style={{
             borderColor: ACCENT_COLOR,
@@ -540,7 +541,7 @@ function ChallengeReport({
               textShadowOffset: { width: 0, height: 0 },
             }}
           >
-            Riprova
+            {result.passed ? "Go back" : "Retry"}
           </Text>
         </Pressable>
       </ScrollView>

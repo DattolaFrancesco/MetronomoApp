@@ -67,37 +67,37 @@ const BATTERE: ChallengeSegment = {
   subdivision: "quarter",
   tripletTarget: 2,
   sixteenthTarget: 2,
-  label: "Quarto",
+  label: "Quarter",
 };
 const LEVARE: ChallengeSegment = {
   subdivision: "eighth",
   tripletTarget: 2,
   sixteenthTarget: 2,
-  label: "Levare",
+  label: "Upbeat",
 };
 const SEDICESIMO_2: ChallengeSegment = {
   subdivision: "sixteenth",
   tripletTarget: 2,
   sixteenthTarget: 2,
-  label: "Sedicesimo-2",
+  label: "Sixteenth-2",
 };
 const SEDICESIMO_3: ChallengeSegment = {
   subdivision: "sixteenth",
   tripletTarget: 2,
   sixteenthTarget: 3,
-  label: "Sedicesimo-3",
+  label: "Sixteenth-3",
 };
 const TERZINA_2: ChallengeSegment = {
   subdivision: "triplet",
   tripletTarget: 2,
   sixteenthTarget: 2,
-  label: "Terzina-2",
+  label: "Triplet-2",
 };
 const TERZINA_3: ChallengeSegment = {
   subdivision: "triplet",
   tripletTarget: 3,
   sixteenthTarget: 2,
-  label: "Terzina-3",
+  label: "Triplet-3",
 };
 
 // A whole bar (all 4 quarters) evaluated on the same segment — the common
@@ -117,9 +117,9 @@ export function challengeBars(challenge: Challenge): number {
 // difficulty order, not appended, so the list stays sorted without extra
 // UI-side sorting logic.
 //
-// Difficulty reasoning: "2° Sedicesimo" (the "e" of "1-e-&-a", 1/4 into
-// the beat) and "3° Sedicesimo" (the "a", 3/4 into the beat) are both less
-// intuitive to feel accurately than "Levare" (the "&", the beat's exact
+// Difficulty reasoning: "2nd sixteenth" (the "e" of "1-e-&-a", 1/4 into
+// the beat) and "3rd sixteenth" (the "a", 3/4 into the beat) are both less
+// intuitive to feel accurately than "upbeat" (the "&", the beat's exact
 // midpoint and the most familiar off-beat in music) or a triplet note
 // (a different, but still singular, evenly-spaced grid) — that's why the
 // sixteenth-note pairings rank above the eighth/triplet ones within each
@@ -130,74 +130,74 @@ export function challengeBars(challenge: Challenge): number {
 export const CHALLENGES: Challenge[] = [
   {
     id: "battere-poi-levare",
-    name: "Battere → Levare",
+    name: "Downbeat → Upbeat",
     difficulty: "facile",
     toleranceMs: 90,
     description:
-      "Una battuta sul battere (i quarti), poi subito una battuta sul levare (gli ottavi in levare).",
+      "One bar on the downbeat (the quarters), then immediately one bar on the upbeat (the off-beat eighths).",
     quarterSegments: [...bar(BATTERE), ...bar(LEVARE)],
   },
   {
     id: "levare-poi-battere",
-    name: "Levare → Battere",
+    name: "Upbeat → Downbeat",
     difficulty: "facile",
     toleranceMs: 90,
     description:
-      "La stessa coppia della sfida precedente, ma invertita: prima il levare, poi subito il battere.",
+      "The same pair as the previous challenge, but reversed: upbeat first, then immediately the downbeat.",
     quarterSegments: [...bar(LEVARE), ...bar(BATTERE)],
   },
   {
     id: "battere-poi-sedicesimo2",
-    name: "Battere → 2° Sedicesimo",
+    name: "Downbeat → 2nd Sixteenth",
     difficulty: "medio",
     toleranceMs: 80,
     description:
-      "Una battuta sul battere (i quarti), poi subito una battuta sul secondo sedicesimo di ogni quarto.",
+      "One bar on the downbeat (the quarters), then immediately one bar on the second sixteenth of each quarter.",
     quarterSegments: [...bar(BATTERE), ...bar(SEDICESIMO_2)],
   },
   {
     id: "battere-poi-terzina3",
-    name: "Battere → 3ª Terzina",
+    name: "Downbeat → 3rd Triplet",
     difficulty: "medio",
     toleranceMs: 80,
     description:
-      "Una battuta sul battere (i quarti), poi subito una battuta sulla terza nota di ogni terzina.",
+      "One bar on the downbeat (the quarters), then immediately one bar on the third note of each triplet.",
     quarterSegments: [...bar(BATTERE), ...bar(TERZINA_3)],
   },
   {
     id: "levare-poi-sedicesimo2",
-    name: "Levare → 2° Sedicesimo",
+    name: "Upbeat → 2nd Sixteenth",
     difficulty: "difficile",
     toleranceMs: 70,
     description:
-      "Una battuta sul levare (gli ottavi in levare), poi subito una battuta sul secondo sedicesimo di ogni quarto.",
+      "One bar on the upbeat (the off-beat eighths), then immediately one bar on the second sixteenth of each quarter.",
     quarterSegments: [...bar(LEVARE), ...bar(SEDICESIMO_2)],
   },
   {
     id: "terzina2-poi-sedicesimo3",
-    name: "2ª Terzina → 3° Sedicesimo",
+    name: "2nd Triplet → 3rd Sixteenth",
     difficulty: "difficile",
     toleranceMs: 70,
     description:
-      "Una battuta sulla seconda nota di ogni terzina, poi subito una battuta sul terzo sedicesimo di ogni quarto.",
+      "One bar on the second note of each triplet, then immediately one bar on the third sixteenth of each quarter.",
     quarterSegments: [...bar(TERZINA_2), ...bar(SEDICESIMO_3)],
   },
   {
     id: "battere-levare-terzina3",
-    name: "Battere → Levare → 3ª Terzina",
+    name: "Downbeat → Upbeat → 3rd Triplet",
     difficulty: "expert",
     toleranceMs: 60,
     description:
-      "Tre battute di fila, ciascuna con una suddivisione diversa: quarti, poi levare, poi la terza nota della terzina.",
+      "Three bars in a row, each with a different subdivision: quarters, then upbeat, then the third note of the triplet.",
     quarterSegments: [...bar(BATTERE), ...bar(LEVARE), ...bar(TERZINA_3)],
   },
   {
     id: "alternanza-battuta",
-    name: "Alternanza nella stessa battuta",
+    name: "Alternating Within a Bar",
     difficulty: "expert",
     toleranceMs: 60,
     description:
-      "Una sola battuta: il 1° e il 3° quarto si suonano sul battere, il 2° e il 4° sul secondo sedicesimo — il cambio di suddivisione avviene dentro la stessa battuta.",
+      "A single bar: the 1st and 3rd quarters are played on the downbeat, the 2nd and 4th on the second sixteenth — the subdivision change happens within the same bar.",
     quarterSegments: [BATTERE, SEDICESIMO_2, BATTERE, SEDICESIMO_2],
   },
 ];

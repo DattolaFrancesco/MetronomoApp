@@ -131,17 +131,17 @@ describe("scoreChallenge — battere-poi-levare (tolerance raised from 80ms to 9
   });
 });
 
-describe("scoreChallenge — levare-poi-battere (same pair as facile-1, reversed order)", () => {
+describe("scoreChallenge — levare-poi-battere (same pair as easy-1, reversed order)", () => {
   const challenge = getChallenge("levare-poi-battere");
 
-  test("passes when bar 1 lands on the levare and bar 2 on the battere", () => {
-    // Bar 1's last hit (Levare 4) and bar 2's first (Quarto 1) sit exactly
+  test("passes when bar 1 lands on the upbeat and bar 2 on the downbeat", () => {
+    // Bar 1's last hit (Upbeat 4) and bar 2's first (Quarter 1) sit exactly
     // matchRadius (half a beat) apart — the one bar-boundary pairing in
     // this whole suite where a single-bucket synthetic spike creates a
     // genuine amplitude tie between two *different* bars' search windows.
     // pickPeakInRange (rhythm-detection.ts) deliberately keeps the first
     // candidate found on a tie, so without this nudge bar 2's search would
-    // grab bar 1's hit instead of its own. Nudging Levare 4 30ms early
+    // grab bar 1's hit instead of its own. Nudging Upbeat 4 30ms early
     // (well inside the 90ms tolerance, so it's still clearly "on time")
     // breaks the tie — real playing would never land on that exact
     // boundary in the first place.
@@ -151,14 +151,14 @@ describe("scoreChallenge — levare-poi-battere (same pair as facile-1, reversed
     const result = scoreChallenge(challenge, buildWaveform(targets), BPM, LEAD_IN_MS);
 
     expect(result.hits.map((h) => h.label)).toEqual([
-      "Levare 1", "Levare 2", "Levare 3", "Levare 4",
-      "Quarto 1", "Quarto 2", "Quarto 3", "Quarto 4",
+      "Upbeat 1", "Upbeat 2", "Upbeat 3", "Upbeat 4",
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
     ]);
     expect(result.passed).toBe(true);
   });
 
-  test("playing the battere in bar 1 instead of the levare does not pass that bar", () => {
-    const wrongBar1 = [0, 500, 1000, 1500]; // battere positions, not levare
+  test("playing the downbeat in bar 1 instead of the upbeat does not pass that bar", () => {
+    const wrongBar1 = [0, 500, 1000, 1500]; // downbeat positions, not upbeat
     const bar2 = allTargetsMs(challenge).slice(4);
     const result = scoreChallenge(challenge, buildWaveform([...wrongBar1, ...bar2]), BPM, LEAD_IN_MS);
 
@@ -174,8 +174,8 @@ describe("scoreChallenge — battere-poi-terzina3 and terzina2-poi-sedicesimo3 (
     const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
 
     expect(result.hits.map((h) => h.label)).toEqual([
-      "Quarto 1", "Quarto 2", "Quarto 3", "Quarto 4",
-      "Terzina-3 1", "Terzina-3 2", "Terzina-3 3", "Terzina-3 4",
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
+      "Triplet-3 1", "Triplet-3 2", "Triplet-3 3", "Triplet-3 4",
     ]);
     expect(result.passed).toBe(true);
   });
@@ -185,8 +185,8 @@ describe("scoreChallenge — battere-poi-terzina3 and terzina2-poi-sedicesimo3 (
     const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
 
     expect(result.hits.map((h) => h.label)).toEqual([
-      "Terzina-2 1", "Terzina-2 2", "Terzina-2 3", "Terzina-2 4",
-      "Sedicesimo-3 1", "Sedicesimo-3 2", "Sedicesimo-3 3", "Sedicesimo-3 4",
+      "Triplet-2 1", "Triplet-2 2", "Triplet-2 3", "Triplet-2 4",
+      "Sixteenth-3 1", "Sixteenth-3 2", "Sixteenth-3 3", "Sixteenth-3 4",
     ]);
     expect(result.passed).toBe(true);
   });
@@ -195,14 +195,14 @@ describe("scoreChallenge — battere-poi-terzina3 and terzina2-poi-sedicesimo3 (
 describe("scoreChallenge — battere-levare-terzina3 (Expert 1, extended to 3 bars)", () => {
   const challenge = getChallenge("battere-levare-terzina3");
 
-  test("passes when all 12 hits across the 3 bars (quarti, levare, terzina-3) land on time", () => {
+  test("passes when all 12 hits across the 3 bars (quarters, upbeat, triplet-3) land on time", () => {
     const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
 
     expect(result.hits).toHaveLength(12);
     expect(result.hits.map((h) => h.label)).toEqual([
-      "Quarto 1", "Quarto 2", "Quarto 3", "Quarto 4",
-      "Levare 1", "Levare 2", "Levare 3", "Levare 4",
-      "Terzina-3 1", "Terzina-3 2", "Terzina-3 3", "Terzina-3 4",
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
+      "Upbeat 1", "Upbeat 2", "Upbeat 3", "Upbeat 4",
+      "Triplet-3 1", "Triplet-3 2", "Triplet-3 3", "Triplet-3 4",
     ]);
     expect(result.passed).toBe(true);
   });
@@ -220,7 +220,7 @@ describe("scoreChallenge — battere-levare-terzina3 (Expert 1, extended to 3 ba
 describe("scoreChallenge — alternanza-battuta (Expert 2, mixed subdivision within a single bar)", () => {
   const challenge = getChallenge("alternanza-battuta");
 
-  test("passes when quarters 1&3 land on the battere and quarters 2&4 on the 2nd sixteenth", () => {
+  test("passes when quarters 1&3 land on the downbeat and quarters 2&4 on the 2nd sixteenth", () => {
     const targets = allTargetsMs(challenge);
     expect(targets).toEqual([0, 625, 1000, 1625]);
 
@@ -228,20 +228,20 @@ describe("scoreChallenge — alternanza-battuta (Expert 2, mixed subdivision wit
 
     expect(result.hits).toHaveLength(4);
     expect(result.hits.map((h) => h.label)).toEqual([
-      "Quarto 1", "Sedicesimo-2 2", "Quarto 3", "Sedicesimo-2 4",
+      "Quarter 1", "Sixteenth-2 2", "Quarter 3", "Sixteenth-2 4",
     ]);
     expect(result.hits.every((h) => h.onTime)).toBe(true);
     expect(result.passed).toBe(true);
   });
 
-  test("playing the battere on every quarter (ignoring the alternation) only satisfies quarters 1&3", () => {
+  test("playing the downbeat on every quarter (ignoring the alternation) only satisfies quarters 1&3", () => {
     const allBattere = [0, 500, 1000, 1500];
     const result = scoreChallenge(challenge, buildWaveform(allBattere), BPM, LEAD_IN_MS);
 
-    expect(result.hits[0].onTime).toBe(true); // Quarto 1
-    expect(result.hits[1].onTime).toBe(false); // Sedicesimo-2 2 — this quarter needed the 2nd sixteenth
-    expect(result.hits[2].onTime).toBe(true); // Quarto 3
-    expect(result.hits[3].onTime).toBe(false); // Sedicesimo-2 4
+    expect(result.hits[0].onTime).toBe(true); // Quarter 1
+    expect(result.hits[1].onTime).toBe(false); // Sixteenth-2 2 — this quarter needed the 2nd sixteenth
+    expect(result.hits[2].onTime).toBe(true); // Quarter 3
+    expect(result.hits[3].onTime).toBe(false); // Sixteenth-2 4
     expect(result.passed).toBe(false);
   });
 
@@ -249,10 +249,10 @@ describe("scoreChallenge — alternanza-battuta (Expert 2, mixed subdivision wit
     const allSixteenth2 = [125, 625, 1125, 1625];
     const result = scoreChallenge(challenge, buildWaveform(allSixteenth2), BPM, LEAD_IN_MS);
 
-    expect(result.hits[0].onTime).toBe(false); // Quarto 1 — this quarter needed the battere
-    expect(result.hits[1].onTime).toBe(true); // Sedicesimo-2 2
-    expect(result.hits[2].onTime).toBe(false); // Quarto 3
-    expect(result.hits[3].onTime).toBe(true); // Sedicesimo-2 4
+    expect(result.hits[0].onTime).toBe(false); // Quarter 1 — this quarter needed the downbeat
+    expect(result.hits[1].onTime).toBe(true); // Sixteenth-2 2
+    expect(result.hits[2].onTime).toBe(false); // Quarter 3
+    expect(result.hits[3].onTime).toBe(true); // Sixteenth-2 4
     expect(result.passed).toBe(false);
   });
 });
