@@ -81,7 +81,7 @@ describe("CHALLENGES — data", () => {
       "expert", "expert",
     ]);
     expect(CHALLENGES.map((c) => c.toleranceMs)).toEqual([
-      90, 90, 80, 80, 70, 70, 60, 60,
+      100, 100, 90, 90, 80, 80, 70, 70,
     ]);
   });
 
@@ -98,32 +98,32 @@ describe("CHALLENGES — data", () => {
   });
 });
 
-describe("scoreChallenge — battere-poi-levare (tolerance raised from 80ms to 90ms)", () => {
+describe("scoreChallenge — battere-poi-levare (tolerance raised from 90ms to 100ms)", () => {
   const challenge = getChallenge("battere-poi-levare");
 
   // These two use a bespoke leadIn per test (instead of the shared
   // LEAD_IN_MS) chosen so the offset under test lands exactly on the
   // waveform's 50ms grid — buildWaveform's usual ±25ms rounding slop would
-  // otherwise make an 85ms/95ms offset unreliable this close to the 90ms
+  // otherwise make a 95ms/105ms offset unreliable this close to the 100ms
   // tolerance boundary they're specifically meant to probe.
-  test("a hit 85ms off still counts on time at the new 90ms tolerance", () => {
-    const localLeadInMs = 65; // (0 + 85 + 65) / 50 = 3 exactly
+  test("a hit 95ms off still counts on time at the new 100ms tolerance", () => {
+    const localLeadInMs = 55; // (0 + 95 + 55) / 50 = 3 exactly
     const targets = allTargetsMs(challenge);
     const waveform = buildWaveform(targets, localLeadInMs);
     waveform[Math.round((targets[0] + localLeadInMs) / 50)] = 0.05;
-    waveform[(targets[0] + 85 + localLeadInMs) / 50] = 0.9;
+    waveform[(targets[0] + 95 + localLeadInMs) / 50] = 0.9;
 
     const result = scoreChallenge(challenge, waveform, BPM, localLeadInMs);
     expect(result.hits[0].onTime).toBe(true);
     expect(result.passed).toBe(true);
   });
 
-  test("a hit 95ms off is outside the 90ms tolerance", () => {
-    const localLeadInMs = 55; // (0 + 95 + 55) / 50 = 3 exactly
+  test("a hit 105ms off is outside the 100ms tolerance", () => {
+    const localLeadInMs = 45; // (0 + 105 + 45) / 50 = 3 exactly
     const targets = allTargetsMs(challenge);
     const waveform = buildWaveform(targets, localLeadInMs);
     waveform[Math.round((targets[0] + localLeadInMs) / 50)] = 0.05;
-    waveform[(targets[0] + 95 + localLeadInMs) / 50] = 0.9;
+    waveform[(targets[0] + 105 + localLeadInMs) / 50] = 0.9;
 
     const result = scoreChallenge(challenge, waveform, BPM, localLeadInMs);
     expect(result.hits[0].onTime).toBe(false);
@@ -136,17 +136,15 @@ describe("scoreChallenge — levare-poi-battere (same pair as easy-1, reversed o
 
   test("passes when bar 1 lands on the upbeat and bar 2 on the downbeat", () => {
     // Bar 1's last hit (Upbeat 4) and bar 2's first (Quarter 1) sit exactly
-    // matchRadius (half a beat) apart — the one bar-boundary pairing in
-    // this whole suite where a single-bucket synthetic spike creates a
-    // genuine amplitude tie between two *different* bars' search windows.
-    // pickPeakInRange (rhythm-detection.ts) deliberately keeps the first
-    // candidate found on a tie, so without this nudge bar 2's search would
-    // grab bar 1's hit instead of its own. Nudging Upbeat 4 30ms early
-    // (well inside the 90ms tolerance, so it's still clearly "on time")
-    // breaks the tie — real playing would never land on that exact
-    // boundary in the first place.
+    // matchRadius (half a beat) apart — bar 2's own search window for
+    // Quarter 1 reaches back far enough to touch the exact same bucket
+    // Upbeat 4's own bar-1 call already claimed. Without carrying that
+    // claim forward (see previousBarBuckets in scoreChallenge), bar 2's
+    // call would have no way of knowing that bucket was already spent, and
+    // could grab it for Quarter 1 instead of finding — or correctly
+    // missing — its own real attack right at the boundary. No nudge here
+    // deliberately: this is the exact scenario a real player can hit.
     const targets = allTargetsMs(challenge);
-    targets[3] -= 30;
 
     const result = scoreChallenge(challenge, buildWaveform(targets), BPM, LEAD_IN_MS);
 

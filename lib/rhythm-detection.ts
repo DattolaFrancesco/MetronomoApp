@@ -81,6 +81,13 @@ export type HitDiagnostic = {
   subBeatIndex: number;
   expectedTimeMs: number;
   matched: boolean;
+  // Waveform bucket index this hit's peak was found at (null when
+  // unmatched) — lets a caller that scores several analyzeSession calls
+  // against the same continuous waveform (see scoreChallenge) carry
+  // forward which buckets a previous call already spent, so a later call's
+  // search window can't re-claim the same physical peak. See claimedBuckets
+  // below / analyzeSession's excludedBuckets parameter.
+  bucket: number | null;
   deltaMs: number | null;
   status: OnsetStatus | null;
   candidateAmplitude: number | null;
@@ -483,6 +490,14 @@ export function analyzeSession(
   toleranceMs: number,
   maxBars: number | undefined,
   leadInMs = 0,
+  // Buckets a previous, separate analyzeSession call over this same
+  // waveform already claimed — passed in by scoreChallenge across
+  // consecutive bar-scoped calls so a bar's first hit can't grab a peak
+  // that actually belongs to the tail end of the previous bar (the two can
+  // sit as close as matchRadius apart, e.g. Upbeat 4 → Quarter 1 in
+  // "levare-poi-battere"). Empty for every other caller (free mode,
+  // tests), so this is a no-op everywhere except scoreChallenge.
+  excludedBuckets: ReadonlySet<number> = new Set(),
 ): {
   events: OnsetEvent[];
   rejectedPeaks: RejectedPeak[];
@@ -541,7 +556,7 @@ export function analyzeSession(
   // quarters at a very fast tempo) can both independently land on the
   // exact same real peak and each report it as their own hit, drawing two
   // onset lines for what was actually a single hit.
-  const claimedBuckets = new Set<number>();
+  const claimedBuckets = new Set<number>(excludedBuckets);
 
   for (const hit of expectedHits) {
     const targetTime = hit.time;
@@ -619,6 +634,7 @@ export function analyzeSession(
       subBeatIndex: hit.subBeatIndex,
       expectedTimeMs: targetTime,
       matched: bestBucket !== null,
+      bucket: bestBucket,
       deltaMs,
       status,
       candidateAmplitude: diagAmp,

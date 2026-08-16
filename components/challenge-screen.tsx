@@ -529,12 +529,22 @@ function ChallengeReport({
               <Text className="text-white text-sm font-semibold">
                 {hit.label}
               </Text>
-              <Text
-                className="text-sm font-bold"
-                style={{ color: hit.onTime ? SUCCESS_COLOR : FAIL_COLOR }}
-              >
-                {hit.onTime ? "✓" : "✗"}
-              </Text>
+              <View className="flex-row items-center gap-2">
+                <Text
+                  className="text-xs font-semibold"
+                  style={{ color: hit.onTime ? SUCCESS_COLOR : FAIL_COLOR }}
+                >
+                  {hit.deltaMs === null
+                    ? "missed"
+                    : `${hit.deltaMs > 0 ? "+" : ""}${Math.round(hit.deltaMs)}ms`}
+                </Text>
+                <Text
+                  className="text-sm font-bold"
+                  style={{ color: hit.onTime ? SUCCESS_COLOR : FAIL_COLOR }}
+                >
+                  {hit.onTime ? "✓" : "✗"}
+                </Text>
+              </View>
             </View>
           ))}
         </View>
