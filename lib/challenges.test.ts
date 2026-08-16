@@ -70,7 +70,7 @@ describe("CHALLENGES — data", () => {
       "battere-poi-sedicesimo2",
       "battere-poi-terzina3",
       "levare-poi-sedicesimo2",
-      "terzina2-poi-sedicesimo3",
+      "giro-sedicesimi",
       "battere-levare-terzina3",
       "alternanza-battuta",
     ]);
@@ -85,9 +85,9 @@ describe("CHALLENGES — data", () => {
     ]);
   });
 
-  test("challengeBars derives the right bar count for a 2-bar, a 3-bar, and the single-bar challenge", () => {
+  test("challengeBars derives the right bar count for a 2-bar, a 4-bar, and the single-bar challenge", () => {
     expect(challengeBars(getChallenge("battere-poi-levare"))).toBe(2);
-    expect(challengeBars(getChallenge("battere-levare-terzina3"))).toBe(3);
+    expect(challengeBars(getChallenge("giro-sedicesimi"))).toBe(4);
     expect(challengeBars(getChallenge("alternanza-battuta"))).toBe(1);
   });
 
@@ -166,8 +166,8 @@ describe("scoreChallenge — levare-poi-battere (same pair as easy-1, reversed o
   });
 });
 
-describe("scoreChallenge — battere-poi-terzina3 and terzina2-poi-sedicesimo3 (new triplet-based pairings)", () => {
-  test("battere-poi-terzina3 passes when bar 2 lands on the triplet's 3rd note", () => {
+describe("scoreChallenge — battere-poi-terzina3 (triplet-based pairing)", () => {
+  test("passes when bar 2 lands on the triplet's 3rd note", () => {
     const challenge = getChallenge("battere-poi-terzina3");
     const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
 
@@ -177,16 +177,31 @@ describe("scoreChallenge — battere-poi-terzina3 and terzina2-poi-sedicesimo3 (
     ]);
     expect(result.passed).toBe(true);
   });
+});
 
-  test("terzina2-poi-sedicesimo3 passes when bar 1 lands on the triplet's 2nd note and bar 2 on the 3rd sixteenth", () => {
-    const challenge = getChallenge("terzina2-poi-sedicesimo3");
+describe("scoreChallenge — giro-sedicesimi (four bars, one per sixteenth position)", () => {
+  const challenge = getChallenge("giro-sedicesimi");
+
+  test("passes when all 16 hits across the 4 bars (downbeat, 2nd/3rd/4th sixteenth) land on time", () => {
     const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
 
+    expect(result.hits).toHaveLength(16);
     expect(result.hits.map((h) => h.label)).toEqual([
-      "Triplet-2 1", "Triplet-2 2", "Triplet-2 3", "Triplet-2 4",
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
+      "Sixteenth-2 1", "Sixteenth-2 2", "Sixteenth-2 3", "Sixteenth-2 4",
       "Sixteenth-3 1", "Sixteenth-3 2", "Sixteenth-3 3", "Sixteenth-3 4",
+      "Sixteenth-4 1", "Sixteenth-4 2", "Sixteenth-4 3", "Sixteenth-4 4",
     ]);
     expect(result.passed).toBe(true);
+  });
+
+  test("fails if the last bar (4th sixteenth) never sounds", () => {
+    const targets = allTargetsMs(challenge).slice(0, 12);
+    const result = scoreChallenge(challenge, buildWaveform(targets), BPM, LEAD_IN_MS);
+
+    expect(result.hits.slice(0, 12).every((h) => h.onTime)).toBe(true);
+    expect(result.hits.slice(12).every((h) => h.onTime)).toBe(false);
+    expect(result.passed).toBe(false);
   });
 });
 

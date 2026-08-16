@@ -41,7 +41,7 @@ export type ChallengeId =
   | "battere-poi-sedicesimo2"
   | "battere-poi-terzina3"
   | "levare-poi-sedicesimo2"
-  | "terzina2-poi-sedicesimo3"
+  | "giro-sedicesimi"
   | "battere-levare-terzina3"
   | "alternanza-battuta";
 
@@ -87,11 +87,11 @@ const SEDICESIMO_3: ChallengeSegment = {
   sixteenthTarget: 3,
   label: "Sixteenth-3",
 };
-const TERZINA_2: ChallengeSegment = {
-  subdivision: "triplet",
+const SEDICESIMO_4: ChallengeSegment = {
+  subdivision: "sixteenth",
   tripletTarget: 2,
-  sixteenthTarget: 2,
-  label: "Triplet-2",
+  sixteenthTarget: 4,
+  label: "Sixteenth-4",
 };
 const TERZINA_3: ChallengeSegment = {
   subdivision: "triplet",
@@ -174,13 +174,18 @@ export const CHALLENGES: Challenge[] = [
     quarterSegments: [...bar(LEVARE), ...bar(SEDICESIMO_2)],
   },
   {
-    id: "terzina2-poi-sedicesimo3",
-    name: "2nd Triplet → 3rd Sixteenth",
+    id: "giro-sedicesimi",
+    name: "1st → 2nd → 3rd → 4th Sixteenth",
     difficulty: "difficile",
     toleranceMs: 80,
     description:
-      "One bar on the second note of each triplet, then immediately one bar on the third sixteenth of each quarter.",
-    quarterSegments: [...bar(TERZINA_2), ...bar(SEDICESIMO_3)],
+      "Four bars in a row, one per sixteenth-note position within the beat: first the downbeat, then the second, third, and fourth sixteenth in turn.",
+    quarterSegments: [
+      ...bar(BATTERE),
+      ...bar(SEDICESIMO_2),
+      ...bar(SEDICESIMO_3),
+      ...bar(SEDICESIMO_4),
+    ],
   },
   {
     id: "battere-levare-terzina3",

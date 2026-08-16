@@ -3,8 +3,11 @@ import DarkPanel from "@/components/dark-panel";
 import { GlowDivider } from "@/components/session-setup";
 import SyncRecorder, { type SessionSummary } from "@/components/sync-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
+import TimingMasterScreen from "@/components/timing-master-screen";
 import {
   getCompletedChallengeIds,
+  hasSeenAllChallengesAchievement,
+  markAllChallengesAchievementSeen,
   markChallengeCompleted,
 } from "@/lib/challenge-progress";
 import {
@@ -81,6 +84,11 @@ type ChallengeScreenProps = {
 export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
   const [activeChallenge, setActiveChallenge] = useState<Challenge | null>(null);
   const [completedIds, setCompletedIds] = useState<Set<ChallengeId>>(new Set());
+  // Replaying the achievement screen on demand (from the list, once every
+  // challenge is complete) is independent of the one-time auto-celebration
+  // in ChallengeSession/markAllChallengesAchievementSeen — this can be
+  // opened and closed as many times as the player likes.
+  const [showMasteryReplay, setShowMasteryReplay] = useState(false);
 
   // Re-read on mount and every time we're back on the list (including
   // right after finishing a session) — a fresh read from storage is the
@@ -98,6 +106,10 @@ export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
     };
   }, [activeChallenge]);
 
+  if (showMasteryReplay) {
+    return <TimingMasterScreen onClose={() => setShowMasteryReplay(false)} />;
+  }
+
   if (activeChallenge) {
     return (
       <ChallengeSession
@@ -111,6 +123,7 @@ export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
     <ChallengeList
       completedIds={completedIds}
       onSelect={setActiveChallenge}
+      onViewMastery={() => setShowMasteryReplay(true)}
       onBack={onBack}
     />
   );
@@ -121,13 +134,16 @@ export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
 function ChallengeList({
   completedIds,
   onSelect,
+  onViewMastery,
   onBack,
 }: {
   completedIds: Set<ChallengeId>;
   onSelect: (challenge: Challenge) => void;
+  onViewMastery: () => void;
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const allComplete = CHALLENGES.every((c) => completedIds.has(c.id));
 
   return (
     <LinearGradient
@@ -166,6 +182,28 @@ function ChallengeList({
         >
           Challenge
         </Text>
+
+        {allComplete && (
+          <Pressable onPress={onViewMastery} className="active:opacity-70">
+            <DarkPanel
+              className="px-4 py-3.5 flex-row items-center justify-between"
+              style={{ borderColor: "rgba(255,59,48,0.35)" }}
+            >
+              <View className="flex-row items-center gap-2.5">
+                <Text style={{ fontSize: 18 }}>🏆</Text>
+                <Text className="text-white text-sm font-bold">
+                  You're a Timing Master
+                </Text>
+              </View>
+              <Text
+                className="text-xs font-bold uppercase tracking-wider"
+                style={{ color: ACCENT_COLOR }}
+              >
+                View
+              </Text>
+            </DarkPanel>
+          </Pressable>
+        )}
 
         <View style={{ height: 1, backgroundColor: "rgba(255,255,255,0.12)" }} />
 
@@ -210,6 +248,11 @@ function ChallengeSession({
   const [phase, setPhase] = useState<Phase>("idle");
   const [countInBeat, setCountInBeat] = useState<number | null>(null);
   const [result, setResult] = useState<ChallengeResult | null>(null);
+  // Set once handleSessionEnd finds this pass was the one that completed
+  // every challenge for the first time — read by the report's onExit below
+  // to show TimingMasterScreen instead of leaving straight back to the list.
+  const [masteryPending, setMasteryPending] = useState(false);
+  const [showMastery, setShowMastery] = useState(false);
 
   const phaseRef = useRef<Phase>("idle");
   // Guards handleStart/handleStop against a double-tap firing both before
@@ -299,7 +342,7 @@ function ChallengeSession({
   // waveform SyncRecorder just recorded — see scoreChallenge. The fixed
   // subdivision="quarter" below is only ever used for SyncRecorder's own
   // (here unused) live approximate status flash, never for this result.
-  const handleSessionEnd = (summary: SessionSummary) => {
+  const handleSessionEnd = async (summary: SessionSummary) => {
     const scored = scoreChallenge(
       challenge,
       summary.waveform,
@@ -308,18 +351,43 @@ function ChallengeSession({
     );
     setResult(scored);
     if (scored.passed) {
-      markChallengeCompleted(challenge.id);
+      await markChallengeCompleted(challenge.id);
+      const completedIds = await getCompletedChallengeIds();
+      const allComplete = CHALLENGES.every((c) => completedIds.has(c.id));
+      if (allComplete && !(await hasSeenAllChallengesAchievement())) {
+        setMasteryPending(true);
+      }
     }
   };
 
   const isCountIn = phase === "countIn";
+
+  if (showMastery) {
+    return (
+      <TimingMasterScreen
+        onClose={async () => {
+          await markAllChallengesAchievementSeen();
+          setShowMastery(false);
+          setMasteryPending(false);
+          setResult(null);
+          onBack();
+        }}
+      />
+    );
+  }
 
   if (result) {
     return (
       <ChallengeReport
         result={result}
         onRetry={() => setResult(null)}
-        onExit={onBack}
+        onExit={() => {
+          if (masteryPending) {
+            setShowMastery(true);
+          } else {
+            onBack();
+          }
+        }}
       />
     );
   }
@@ -491,7 +559,10 @@ function ChallengeReport({
         className="flex-1"
         contentContainerStyle={{
           paddingHorizontal: 24,
-          paddingTop: insets.top + 24,
+          // Clears the back-arrow button above (top: insets.top + 12, 40pt
+          // tall) instead of the report's own headline panel starting right
+          // underneath/behind it.
+          paddingTop: insets.top + 68,
           paddingBottom: insets.bottom + 40,
           gap: 20,
         }}
