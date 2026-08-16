@@ -1,4 +1,5 @@
 import DarkPanel from "@/components/dark-panel";
+import LoadingScreen from "@/components/loading-screen";
 import { getHasSeenTutorial, markTutorialSeen } from "@/lib/onboarding";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useState } from "react";
@@ -57,7 +58,7 @@ export default function TutorialScreen({ onDone }: TutorialScreenProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (checking) return null;
+  if (checking) return <LoadingScreen />;
 
   const isLast = index === SLIDES.length - 1;
   const slide = SLIDES[index];

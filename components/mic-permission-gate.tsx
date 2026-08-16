@@ -1,3 +1,4 @@
+import LoadingScreen from "@/components/loading-screen";
 import {
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
@@ -56,7 +57,7 @@ export default function MicPermissionGate({ onGranted }: Props) {
     setCanAskAgain(permission.canAskAgain);
   };
 
-  if (checking) return null;
+  if (checking) return <LoadingScreen />;
 
   return (
     <View className="flex-1 items-center justify-center gap-6 px-2">
