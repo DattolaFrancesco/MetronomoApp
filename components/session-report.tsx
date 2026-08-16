@@ -100,10 +100,13 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
   const sortedEvents = [...summary.events].sort(
     (a, b) => a.elapsedMs - b.elapsedMs,
   );
-  const total = sortedEvents.length;
-  const onTimeCount = sortedEvents.filter((e) => e.status === "onTime").length;
-  const earlyCount = sortedEvents.filter((e) => e.status === "early").length;
-  const lateCount = sortedEvents.filter((e) => e.status === "late").length;
+  // Denominator is expected hits (one diagnostic per beat slot, matched or
+  // not), not detected events — otherwise missed beats silently vanish from
+  // both sides of the ratio and a session with 2/16 real hits can read 100%.
+  const total = summary.hitDiagnostics.length;
+  const onTimeCount = summary.hitDiagnostics.filter((h) => h.status === "onTime").length;
+  const earlyCount = summary.hitDiagnostics.filter((h) => h.status === "early").length;
+  const lateCount = summary.hitDiagnostics.filter((h) => h.status === "late").length;
   const accuracy = total > 0 ? Math.round((onTimeCount / total) * 100) : null;
 
   return (
