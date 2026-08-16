@@ -207,7 +207,7 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
             className="text-[11px] font-bold uppercase tracking-[2px]"
             style={{ color: ACCENT_COLOR }}
           >
-            Debug / Technical data
+            Timing Analysis
           </Text>
           <DebugChart summary={summary} />
         </DarkPanel>
