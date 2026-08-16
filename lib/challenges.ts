@@ -13,10 +13,14 @@
 import {
   analyzeSession,
   BEATS_PER_BAR,
+  currentWindowHalfMs,
   type HitDiagnostic,
+  type OnsetEvent,
+  type SessionSummary,
   type SixteenthTarget,
   type Subdivision,
   type TripletTarget,
+  WAVEFORM_SAMPLE_INTERVAL_MS,
 } from "./rhythm-detection";
 
 export type ChallengeDifficulty = "facile" | "medio" | "difficile" | "expert";
@@ -213,9 +217,22 @@ export type ChallengeHitResult = {
   deltaMs: number | null;
 };
 
+// One entry per analyzeSession call scoreChallenge actually made (one or,
+// for a bar with more than one group — see Expert 2 — more than one per
+// bar) — lets the report's Timing Analysis section reuse the same
+// DebugChart free mode already has, each instance scoped to exactly the one
+// bar/segment it came from instead of assuming a single subdivision spans
+// the whole recording (which, for almost every challenge, isn't true).
+export type ChallengeDebugGroup = {
+  label: string;
+  barIndex: number;
+  summary: SessionSummary;
+};
+
 export type ChallengeResult = {
   passed: boolean;
   hits: ChallengeHitResult[];
+  debugGroups: ChallengeDebugGroup[];
 };
 
 function segmentKey(segment: ChallengeSegment): string {
@@ -267,6 +284,8 @@ export function scoreChallenge(
   // below), only the bar that came immediately before.
   let previousBarBuckets = new Set<number>();
 
+  const debugGroups: ChallengeDebugGroup[] = [];
+
   for (let barIndex = 0; barIndex < totalBars; barIndex++) {
     const barSegments = challenge.quarterSegments.slice(
       barIndex * BEATS_PER_BAR,
@@ -296,8 +315,53 @@ export function scoreChallenge(
     // it just also feeds the next bar).
     const thisBarBuckets = new Set<number>();
 
+    // Every bar's search windows are capped at its own end — except the
+    // very last bar, which still needs to reach into the recorder's real
+    // post-roll tail (see the last-hit capture-gap fix). Without this cap,
+    // a bar's own last hit's window can reach exactly as far as the next
+    // bar's first hit (they can sit precisely matchRadius apart — e.g.
+    // Upbeat 4 → Quarter 1 in "levare-poi-battere") and, if that next hit
+    // happens to be louder (an accented downbeat is a common case), it
+    // wins pickPeakInRange's "loudest wins" contest and gets wrongly
+    // credited to *this* bar's hit instead.
+    // The one full bucket of margin matters: a bar's last hit and the next
+    // bar's first can sit at *exactly* matchRadius apart (see the comment
+    // above), meaning the natural window edge and the neighboring bar's own
+    // target land on the very same 50ms bucket — a plain `barDurationMs`
+    // ceiling wouldn't actually exclude it (it'd still be the last bucket
+    // included, just via a different arithmetic path). Backing off by one
+    // whole bucket guarantees real separation regardless of tempo, since
+    // WAVEFORM_SAMPLE_INTERVAL_MS is the actual granularity "touching"
+    // happens at, not a fraction of the beat interval.
+    const isLastBar = barIndex === totalBars - 1;
+    const maxSearchTimeMs = isLastBar
+      ? Infinity
+      : barDurationMs - WAVEFORM_SAMPLE_INTERVAL_MS;
+
+    // One debugGroup per *bar*, not per group — a bar is a single musical
+    // moment regardless of how many analyzeSession calls it took to score
+    // it (Expert 2 alone ever has more than one, see the module comment
+    // above). Every group's real, owned-quarter events/diagnostics are
+    // filtered down and merged into one combined summary below instead of
+    // each group getting its own separate "Bar N" chart — a single-bar
+    // challenge should read as one bar in the report, not as many as it
+    // happened to take analyzeSession calls to score.
+    const barEvents: OnsetEvent[] = [];
+    const barHitDiagnostics: HitDiagnostic[] = [];
+    const barLabels: string[] = [];
+    // Grid decoration only (see DebugChart) — which group's subdivision to
+    // draw the fine sub-beat ticks for, when the bar mixes more than one.
+    // Onset line *positions* come from each event's own real elapsedMs/
+    // deltaMs regardless of this choice, so it can't misrepresent where a
+    // hit actually landed — it only picks which reference grid overlays a
+    // mixed bar. Prefers a group with its own real grid (triplet/sixteenth)
+    // over the plain quarter/eighth fallback ruler.
+    let gridSegment: ChallengeSegment | null = null;
+
+    const groupLeadInMs = leadInMs + barIndex * barDurationMs;
+
     for (const { segment, quarterIndices } of groups.values()) {
-      const { hitDiagnostics } = analyzeSession(
+      const { events, hitDiagnostics } = analyzeSession(
         waveform,
         barDurationMs,
         bpm,
@@ -306,9 +370,26 @@ export function scoreChallenge(
         segment.sixteenthTarget,
         challenge.toleranceMs,
         1,
-        leadInMs + barIndex * barDurationMs,
+        groupLeadInMs,
         previousBarBuckets,
+        maxSearchTimeMs,
       );
+
+      const ownedQuarters = new Set(quarterIndices);
+      for (const event of events) {
+        if (ownedQuarters.has(event.beatIndex)) barEvents.push(event);
+      }
+      for (const diag of hitDiagnostics) {
+        if (ownedQuarters.has(diag.beatIndex)) barHitDiagnostics.push(diag);
+      }
+      barLabels.push(segment.label);
+      if (
+        gridSegment === null ||
+        segment.subdivision === "triplet" ||
+        segment.subdivision === "sixteenth"
+      ) {
+        gridSegment = segment;
+      }
 
       for (const quarterIndex of quarterIndices) {
         const hit = hitDiagnostics.find((h) => h.beatIndex === quarterIndex);
@@ -323,13 +404,63 @@ export function scoreChallenge(
       }
     }
 
+    // DebugChart (see components/debug-chart.tsx) treats a summary's own
+    // leadInMs as both "how far bucket 0 sits before this summary's local
+    // elapsedMs=0" *and* "how much pre-roll padding to draw before its
+    // first bar" — true together for a real, whole-session SessionSummary,
+    // but groupLeadInMs above only serves the first purpose (it's however
+    // many bars came before this one, not a real pre-roll margin). Passing
+    // groupLeadInMs straight through would render every bar after the
+    // first with a huge, wrong "pre-roll" region actually made of the
+    // *previous* bar's own real audio. Slicing the shared waveform down to
+    // just a small tempo-adaptive margin around this bar — and rebasing
+    // leadInMs to match that slice — keeps bucket math correct while
+    // giving each debug group its own honest little window.
+    const margin = currentWindowHalfMs(beatIntervalMs);
+    const sliceStartBucket = Math.max(
+      0,
+      Math.floor((groupLeadInMs - margin) / WAVEFORM_SAMPLE_INTERVAL_MS),
+    );
+    const sliceEndBucket = Math.min(
+      waveform.length - 1,
+      Math.ceil(
+        (groupLeadInMs + barDurationMs + margin) / WAVEFORM_SAMPLE_INTERVAL_MS,
+      ),
+    );
+    // gridSegment is only ever null if this bar had zero groups, which
+    // can't happen — every quarter of every bar belongs to some segment.
+    const grid = gridSegment!;
+
+    debugGroups.push({
+      label: barLabels.join(" / "),
+      barIndex,
+      summary: {
+        events: barEvents,
+        rejectedPeaks: [],
+        hitDiagnostics: barHitDiagnostics,
+        durationMs: barDurationMs,
+        toleranceMs: challenge.toleranceMs,
+        bpm,
+        subdivision: grid.subdivision,
+        tripletTarget: grid.tripletTarget,
+        sixteenthTarget: grid.sixteenthTarget,
+        waveform: waveform.slice(sliceStartBucket, sliceEndBucket + 1),
+        maxBars: 1,
+        leadInMs: groupLeadInMs - sliceStartBucket * WAVEFORM_SAMPLE_INTERVAL_MS,
+      },
+    });
+
     previousBarBuckets = thisBarBuckets;
   }
 
   const orderedHits = hits.filter(
     (h): h is ChallengeHitResult => h !== undefined,
   );
-  return { passed: orderedHits.every((h) => h.onTime), hits: orderedHits };
+  return {
+    passed: orderedHits.every((h) => h.onTime),
+    hits: orderedHits,
+    debugGroups,
+  };
 }
 
 function toHitResult(

@@ -155,6 +155,31 @@ describe("scoreChallenge — levare-poi-battere (same pair as easy-1, reversed o
     expect(result.passed).toBe(true);
   });
 
+  test("a loud downbeat right after a quiet Upbeat 4 doesn't steal its hit", () => {
+    // Upbeat 4 (1750ms) and Quarter 1 (2000ms) sit exactly matchRadius
+    // (250ms at 120 BPM) apart — Upbeat 4's own search window reaches all
+    // the way to Quarter 1's target. Before the maxSearchTimeMs cap in
+    // scoreChallenge, pickPeakInRange's "loudest wins" rule meant a louder
+    // Quarter 1 sitting right at that edge would win over Upbeat 4's own,
+    // quieter attack and get wrongly credited as Upbeat 4's hit — exactly
+    // the bug reported from real playing (an accented downbeat is common).
+    const targets = allTargetsMs(challenge);
+    const waveform = buildWaveform(targets);
+    const quietBucket = Math.round((targets[3] + LEAD_IN_MS) / 50);
+    const loudBucket = Math.round((targets[4] + LEAD_IN_MS) / 50);
+    waveform[quietBucket] = 0.4; // Upbeat 4 — real but quiet
+    waveform[loudBucket] = 0.9; // Quarter 1 — accented downbeat
+
+    const result = scoreChallenge(challenge, waveform, BPM, LEAD_IN_MS);
+
+    const upbeat4 = result.hits[3];
+    expect(upbeat4.label).toBe("Upbeat 4");
+    expect(upbeat4.onTime).toBe(true);
+    expect(upbeat4.deltaMs).not.toBeNull();
+    expect(Math.abs(upbeat4.deltaMs ?? Infinity)).toBeLessThan(50);
+    expect(result.passed).toBe(true);
+  });
+
   test("playing the downbeat in bar 1 instead of the upbeat does not pass that bar", () => {
     const wrongBar1 = [0, 500, 1000, 1500]; // downbeat positions, not upbeat
     const bar2 = allTargetsMs(challenge).slice(4);

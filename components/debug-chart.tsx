@@ -74,9 +74,24 @@ type BarRow = {
 
 type DebugChartProps = {
   summary: SessionSummary;
+  // Both default true (SessionReport's single-chart-per-report use). A
+  // caller rendering several DebugCharts in the same report (see
+  // ChallengeReport's Timing Analysis, one instance per bar/segment) sets
+  // these false past the first instance/row — the legend/description
+  // explain the chart itself, not any one bar, so repeating them per
+  // instance is just noise once the reader's already seen it once; the
+  // per-row "Bar N" label is similarly redundant once the caller already
+  // supplies its own heading per instance (every instance here only ever
+  // has one row anyway — maxBars is always 1 in that caller).
+  showDescription?: boolean;
+  showRowLabel?: boolean;
 };
 
-export default function DebugChart({ summary }: DebugChartProps) {
+export default function DebugChart({
+  summary,
+  showDescription = true,
+  showRowLabel = true,
+}: DebugChartProps) {
   const [width, setWidth] = useState(0);
   // "triplet" and "sixteenth" both evaluate every one of their sub-beats
   // (see evaluatedSubBeats in lib/rhythm-detection.ts) and get their own
@@ -274,35 +289,41 @@ export default function DebugChart({ summary }: DebugChartProps) {
 
   return (
     <View className="gap-2">
-      <Text className="text-neutral-600 text-[10px] leading-4">
-        {summary.subdivision === "triplet"
-          ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. The solid red line is the peak detected by the microphone."
-          : summary.subdivision === "sixteenth"
-            ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. The solid red line is the peak detected by the microphone."
-            : "The numbered white lines mark the quarters, the short dashes the sixteenths. The solid red line is the peak detected by the microphone."}
-      </Text>
+      {showDescription && (
+        <>
+          <Text className="text-neutral-600 text-[10px] leading-4">
+            {summary.subdivision === "triplet"
+              ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. The solid red line is the peak detected by the microphone."
+              : summary.subdivision === "sixteenth"
+                ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. The solid red line is the peak detected by the microphone."
+                : "The numbered white lines mark the quarters, the short dashes the sixteenths. The solid red line is the peak detected by the microphone."}
+          </Text>
 
-      <View className="flex-row flex-wrap gap-x-3 gap-y-1">
-        <LegendLine color={QUARTER_TICK_COLOR} label="quarter" />
-        {hasSubdivisionGrid && (
-          <LegendLine
-            color={SUBDIVISION_SECONDARY_TICK_COLOR}
-            label={
-              summary.subdivision === "triplet"
-                ? "triplet subdivisions"
-                : "inner sixteenths"
-            }
-          />
-        )}
-        <LegendLine color={ONSET_LINE_COLOR} label="hit" />
-      </View>
+          <View className="flex-row flex-wrap gap-x-3 gap-y-1">
+            <LegendLine color={QUARTER_TICK_COLOR} label="quarter" />
+            {hasSubdivisionGrid && (
+              <LegendLine
+                color={SUBDIVISION_SECONDARY_TICK_COLOR}
+                label={
+                  summary.subdivision === "triplet"
+                    ? "triplet subdivisions"
+                    : "inner sixteenths"
+                }
+              />
+            )}
+            <LegendLine color={ONSET_LINE_COLOR} label="hit" />
+          </View>
+        </>
+      )}
 
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
         {rows.map((row) => (
           <View key={row.barNumber} style={{ marginBottom: ROW_GAP }}>
-            <Text className="text-white text-[10px] font-bold uppercase tracking-widest mb-1">
-              Bar {row.barNumber}
-            </Text>
+            {showRowLabel && (
+              <Text className="text-white text-[10px] font-bold uppercase tracking-widest mb-1">
+                Bar {row.barNumber}
+              </Text>
+            )}
             <View style={{ width, height: CHART_TOTAL_HEIGHT }}>
               <Canvas style={{ width, height: CHART_TOTAL_HEIGHT }}>
                 <Path path={row.waveformPath} color={WAVEFORM_FILL_COLOR} style="fill" />

@@ -1,5 +1,6 @@
 import BeatIndicator from "@/components/beat-indicator";
 import DarkPanel from "@/components/dark-panel";
+import DebugChart from "@/components/debug-chart";
 import { GlowDivider } from "@/components/session-setup";
 import SyncRecorder, { type SessionSummary } from "@/components/sync-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
@@ -517,9 +518,12 @@ function ChallengeSession({
   );
 }
 
-// Deliberately much simpler than SessionReport (components/session-report.tsx)
-// — a pass/fail verdict plus which of the 8 expected hits were on time, no
-// debug chart or rhythmic notation.
+// A pass/fail verdict plus which expected hits were on time, followed by a
+// Timing Analysis section reusing SessionReport's own DebugChart — one
+// instance per analyzeSession call scoreChallenge actually made (see
+// ChallengeDebugGroup in lib/challenges.ts), since a challenge almost always
+// mixes more than one subdivision across its bars and a single chart can't
+// show more than one subdivision's grid at once.
 function ChallengeReport({
   result,
   onRetry,
@@ -619,6 +623,27 @@ function ChallengeReport({
             </View>
           ))}
         </View>
+
+        <DarkPanel className="px-4 py-4 gap-4 w-full">
+          <Text
+            className="text-[11px] font-bold uppercase tracking-[2px]"
+            style={{ color: ACCENT_COLOR }}
+          >
+            Timing Analysis
+          </Text>
+          {result.debugGroups.map((group, i) => (
+            <View key={`${group.label}-${group.barIndex}-${i}`} className="gap-2">
+              <Text className="text-white text-[10px] font-bold uppercase tracking-widest">
+                Bar {group.barIndex + 1} — {group.label}
+              </Text>
+              <DebugChart
+                summary={group.summary}
+                showDescription={i === 0}
+                showRowLabel={false}
+              />
+            </View>
+          ))}
+        </DarkPanel>
 
         <Pressable
           onPress={result.passed ? onExit : onRetry}

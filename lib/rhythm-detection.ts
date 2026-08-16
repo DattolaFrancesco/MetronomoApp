@@ -498,6 +498,18 @@ export function analyzeSession(
   // "levare-poi-battere"). Empty for every other caller (free mode,
   // tests), so this is a no-op everywhere except scoreChallenge.
   excludedBuckets: ReadonlySet<number> = new Set(),
+  // True-time ceiling (same 0-based coordinate as targetTime/durationMs) no
+  // hit's search window may reach past, regardless of matchRadius — set by
+  // scoreChallenge to the end of the current bar for every bar except the
+  // last, so a bar's own last hit can't reach forward into the *next*
+  // bar's territory and grab whichever of its hits happens to be louder
+  // (e.g. an accented downbeat sitting right at the edge of the previous
+  // bar's last levare — same matchRadius-apart pairing as excludedBuckets
+  // above, just the mirror direction: this guards the search *before* it's
+  // made, excludedBuckets cleans up *after*). Left at Infinity (no ceiling)
+  // for every other caller and for a challenge's actual final bar, which
+  // still needs to reach into the recorder's real post-roll tail.
+  maxSearchTimeMs = Infinity,
 ): {
   events: OnsetEvent[];
   rejectedPeaks: RejectedPeak[];
@@ -569,10 +581,14 @@ export function analyzeSession(
         (targetTimeInWaveform - matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS,
       ),
     );
+    const windowEndTrueTime = Math.min(
+      targetTime + matchRadius,
+      maxSearchTimeMs,
+    );
     const lastBucket = Math.min(
       waveform.length - 1,
       Math.ceil(
-        (targetTimeInWaveform + matchRadius) / WAVEFORM_SAMPLE_INTERVAL_MS,
+        (windowEndTrueTime + leadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS,
       ),
     );
 
