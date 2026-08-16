@@ -1,16 +1,16 @@
 {
   "expo": {
     "name": "Timing",
-    "slug": "MetronomoApp",
+    "slug": "Timing",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "metronomoapp",
+    "scheme": "timing",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.MetronomoApp"
+      "bundleIdentifier": "com.davideandreatta.timing"
     },
     "android": {
       "adaptiveIcon": {
@@ -27,7 +27,7 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
-      "package": "com.anonymous.MetronomoApp"
+      "package": "com.davideandreatta.timing"
     },
     "web": {
       "output": "static",
@@ -58,6 +58,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "7f46bb67-1be4-4f0b-9bad-79fdc2e5839d"
+      }
+    },
+    "owner": "sdatten"
   }
 }
