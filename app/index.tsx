@@ -503,15 +503,7 @@ export default function Home() {
         {/* Only shown once a session is actually running (after Start) —
             the setup screen already lets you preview subdivisions before
             starting, so there's nothing useful to light up while idle. */}
-        {phase !== "idle" && (
-          <BeatIndicator
-            isActive
-            bpm={bpm}
-            subdivision={setupSubdivision}
-            tripletTarget={tripletTarget}
-            sixteenthTarget={sixteenthTarget}
-          />
-        )}
+        {phase !== "idle" && <BeatIndicator isActive />}
 
         {/* Which off-beat note to evaluate — only meaningful for
             "triplet"/"sixteenth", and only changeable before Start (the

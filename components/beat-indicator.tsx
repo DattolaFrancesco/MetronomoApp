@@ -1,10 +1,3 @@
-import {
-  primarySubBeat,
-  type SixteenthTarget,
-  SUBDIVISION_STEPS,
-  type Subdivision,
-  type TripletTarget,
-} from "@/components/sync-recorder";
 import ExpoPrecisionMetronomeModule, {
   type BeatEventPayload,
 } from "expo-precision-metronome";
@@ -23,19 +16,7 @@ const ACTIVE_COLOR = "#FF3B30";
 const ACTIVE_TRANSPARENT = "rgba(255,59,48,0)";
 const INACTIVE_BORDER = "#3A3A3C";
 
-type BeatDotProps = {
-  active: boolean;
-  // The "primary" sub-beat (see primarySubBeat in lib/rhythm-detection.ts)
-  // is drawn bigger/brighter; every other sub-beat is drawn smaller/dimmer.
-  // Normally that's the native quarter beat itself — but for "eighth",
-  // "triplet", and "sixteenth", only the chosen off-beat is actually judged
-  // by peak detection, so it's that off-beat that gets the prominent style
-  // here instead, even though the quarter is still shown (demoted to
-  // secondary).
-  isPrimary: boolean;
-};
-
-function BeatDot({ active, isPrimary }: BeatDotProps) {
+function BeatDot({ active }: { active: boolean }) {
   const glow = useSharedValue(0);
 
   useEffect(() => {
@@ -49,23 +30,18 @@ function BeatDot({ active, isPrimary }: BeatDotProps) {
       [ACTIVE_TRANSPARENT, ACTIVE_COLOR],
     ),
     borderColor: interpolateColor(glow.value, [0, 1], [INACTIVE_BORDER, ACTIVE_COLOR]),
-    shadowOpacity: glow.value * (isPrimary ? 0.9 : 0.45),
-    transform: [{ scale: 1 + glow.value * (isPrimary ? 0.15 : 0.25) }],
+    shadowOpacity: glow.value * 0.9,
+    transform: [{ scale: 1 + glow.value * 0.15 }],
   }));
 
   return (
     <Animated.View
-      className={
-        isPrimary
-          ? "w-4 h-4 rounded-full border-[1.5px]"
-          : "w-2 h-2 rounded-full border"
-      }
+      className="w-4 h-4 rounded-full border-[1.5px]"
       style={[
         {
           shadowColor: ACTIVE_COLOR,
-          shadowRadius: isPrimary ? 8 : 4,
+          shadowRadius: 8,
           shadowOffset: { width: 0, height: 0 },
-          opacity: isPrimary ? 1 : 0.85,
         },
         style,
       ]}
@@ -75,38 +51,15 @@ function BeatDot({ active, isPrimary }: BeatDotProps) {
 
 type BeatIndicatorProps = {
   isActive: boolean;
-  bpm: number;
-  subdivision?: Subdivision;
-  tripletTarget?: TripletTarget;
-  sixteenthTarget?: SixteenthTarget;
 };
 
-export default function BeatIndicator({
-  isActive,
-  bpm,
-  subdivision = "quarter",
-  tripletTarget = 2,
-  sixteenthTarget = 2,
-}: BeatIndicatorProps) {
-  const steps = SUBDIVISION_STEPS[subdivision];
-  const primarySub = primarySubBeat(subdivision, tripletTarget, sixteenthTarget);
-
-  // currentPoint spans 0..BEATS_PER_BAR*steps-1: sub-beat 0 of each quarter
-  // is native truth (from onBeat), sub-beats 1..steps-1 have no native
-  // event and are predicted from the BPM instead.
-  const [currentPoint, setCurrentPoint] = useState<number | null>(null);
+// One dot per native quarter beat — just the downbeat pulse, regardless of
+// which subdivision/off-beat target is selected elsewhere (see
+// evaluatedSubBeats in lib/rhythm-detection.ts): this indicator is a plain
+// metronome visual, not a guide to the judged off-beat position.
+export default function BeatIndicator({ isActive }: BeatIndicatorProps) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const fallbackIndexRef = useRef(0);
-  const bpmRef = useRef(bpm);
-  const stepsRef = useRef(steps);
-  const subTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-  useEffect(() => {
-    bpmRef.current = bpm;
-  }, [bpm]);
-
-  useEffect(() => {
-    stepsRef.current = steps;
-  }, [steps]);
 
   useEffect(() => {
     const subscription = ExpoPrecisionMetronomeModule.addListener(
@@ -115,52 +68,22 @@ export default function BeatIndicator({
         const quarterIndex =
           typeof beat === "number" ? beat % BEATS_PER_BAR : fallbackIndexRef.current;
         fallbackIndexRef.current = (quarterIndex + 1) % BEATS_PER_BAR;
-
-        for (const t of subTimeoutsRef.current) clearTimeout(t);
-        subTimeoutsRef.current = [];
-
-        const stepCount = stepsRef.current;
-        const base = quarterIndex * stepCount;
-        setCurrentPoint(base);
-
-        const subIntervalMs = 60000 / bpmRef.current / stepCount;
-        for (let sub = 1; sub < stepCount; sub++) {
-          subTimeoutsRef.current.push(
-            setTimeout(() => {
-              setCurrentPoint(base + sub);
-            }, sub * subIntervalMs),
-          );
-        }
+        setActiveIndex(quarterIndex);
       },
     );
-    return () => {
-      subscription.remove();
-      for (const t of subTimeoutsRef.current) clearTimeout(t);
-    };
+    return () => subscription.remove();
   }, []);
 
   useEffect(() => {
-    if (!isActive) {
-      fallbackIndexRef.current = 0;
-      for (const t of subTimeoutsRef.current) clearTimeout(t);
-      subTimeoutsRef.current = [];
-    }
+    if (!isActive) fallbackIndexRef.current = 0;
   }, [isActive]);
 
-  const displayedPoint = isActive ? currentPoint : null;
+  const displayedIndex = isActive ? activeIndex : null;
 
   return (
     <View className="flex-row items-center justify-center gap-4">
       {Array.from({ length: BEATS_PER_BAR }).map((_, groupIndex) => (
-        <View key={groupIndex} className="flex-row items-center gap-1.5">
-          {Array.from({ length: steps }).map((_, sub) => (
-            <BeatDot
-              key={sub}
-              isPrimary={sub === primarySub}
-              active={groupIndex * steps + sub === displayedPoint}
-            />
-          ))}
-        </View>
+        <BeatDot key={groupIndex} active={groupIndex === displayedIndex} />
       ))}
     </View>
   );

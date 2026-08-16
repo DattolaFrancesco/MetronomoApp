@@ -447,7 +447,7 @@ function ChallengeSession({
           </View>
         )}
 
-        {phase !== "idle" && <BeatIndicator isActive bpm={bpm} />}
+        {phase !== "idle" && <BeatIndicator isActive />}
 
         <SyncRecorder
           isArmed={phase !== "idle"}
