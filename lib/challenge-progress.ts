@@ -31,3 +31,21 @@ export async function markChallengeCompleted(id: ChallengeId): Promise<void> {
   current.add(id);
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([...current]));
 }
+
+// Separate flag for the one-time "you completed every challenge" celebration
+// screen (see components/timing-master-screen.tsx) — kept distinct from
+// completedIds above so it only ever fires once, even though completedIds
+// itself stays "all complete" forever after.
+const ACHIEVEMENT_STORAGE_KEY = "challengeProgress:allChallengesAchievementSeen";
+
+export async function hasSeenAllChallengesAchievement(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(ACHIEVEMENT_STORAGE_KEY)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function markAllChallengesAchievementSeen(): Promise<void> {
+  await AsyncStorage.setItem(ACHIEVEMENT_STORAGE_KEY, "true");
+}

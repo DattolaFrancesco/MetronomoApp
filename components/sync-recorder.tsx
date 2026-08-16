@@ -245,6 +245,16 @@ export default function SyncRecorder({
   // started the tracked session — lets the onBeat handler compute "how many
   // beats into the session are we" without any extra counter of its own.
   const recordingStartBeatRef = useRef<number | null>(null);
+  // Pending call to onLimitReachedRef, scheduled a bit after the auto-stop
+  // condition is first detected (see the onBeat handler below) instead of
+  // fired synchronously — gives the mic a little extra post-roll past the
+  // last real beat before recording actually tears down. Also guards
+  // against scheduling it twice (the engine keeps ticking, so onBeat keeps
+  // firing, until the delayed call above actually reaches the parent and
+  // stops it).
+  const limitReachedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const pendingBeatRef = useRef<BeatAccent | null>(null);
 
   // Rolling short history of recent samples, so the peak search opened by a
@@ -662,6 +672,18 @@ export default function SyncRecorder({
         // beat's window, so it's safe to bail here without opening a new
         // one. The caller stops the engine; onSessionEnd fires from the
         // teardown that triggers (same path a manual Stop already uses).
+        //
+        // The actual call is delayed by half a beat instead of firing here
+        // synchronously — this phantom beat is already ~one full
+        // beatIntervalMs past the true last beat, but a late final hit
+        // (e.g. a triplet's 3rd note, or the 4th sixteenth) can still need
+        // more: its own onset-capture window reaches up to another half
+        // beat past its target. Without this, that window gets clipped by
+        // the waveform array's own end and the hit is unmatchable no
+        // matter how the user actually played it (see analyzeSession's
+        // matchRadius in lib/rhythm-detection.ts). Staying under a full
+        // beat keeps this silent — the engine gets stopped (from inside
+        // the delayed call) before it would otherwise play another click.
         if (
           recordingStartedRef.current &&
           maxBarsRef.current != null &&
@@ -669,7 +691,12 @@ export default function SyncRecorder({
           beat - recordingStartBeatRef.current >=
             maxBarsRef.current * BEATS_PER_BAR
         ) {
-          onLimitReachedRef.current?.();
+          if (!limitReachedTimeoutRef.current) {
+            limitReachedTimeoutRef.current = setTimeout(() => {
+              limitReachedTimeoutRef.current = null;
+              onLimitReachedRef.current?.();
+            }, currentBeatIntervalMs() / 2);
+          }
           return;
         }
 
@@ -763,6 +790,10 @@ export default function SyncRecorder({
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
+      }
+      if (limitReachedTimeoutRef.current) {
+        clearTimeout(limitReachedTimeoutRef.current);
+        limitReachedTimeoutRef.current = null;
       }
       recorder.stop().catch(() => {});
       pendingBeatRef.current = null;

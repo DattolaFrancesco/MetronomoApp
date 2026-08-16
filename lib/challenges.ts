@@ -41,7 +41,7 @@ export type ChallengeId =
   | "battere-poi-sedicesimo2"
   | "battere-poi-terzina3"
   | "levare-poi-sedicesimo2"
-  | "terzina2-poi-sedicesimo3"
+  | "giro-sedicesimi"
   | "battere-levare-terzina3"
   | "alternanza-battuta";
 
@@ -87,11 +87,11 @@ const SEDICESIMO_3: ChallengeSegment = {
   sixteenthTarget: 3,
   label: "Sixteenth-3",
 };
-const TERZINA_2: ChallengeSegment = {
-  subdivision: "triplet",
+const SEDICESIMO_4: ChallengeSegment = {
+  subdivision: "sixteenth",
   tripletTarget: 2,
-  sixteenthTarget: 2,
-  label: "Triplet-2",
+  sixteenthTarget: 4,
+  label: "Sixteenth-4",
 };
 const TERZINA_3: ChallengeSegment = {
   subdivision: "triplet",
@@ -132,7 +132,7 @@ export const CHALLENGES: Challenge[] = [
     id: "battere-poi-levare",
     name: "Downbeat → Upbeat",
     difficulty: "facile",
-    toleranceMs: 90,
+    toleranceMs: 100,
     description:
       "One bar on the downbeat (the quarters), then immediately one bar on the upbeat (the off-beat eighths).",
     quarterSegments: [...bar(BATTERE), ...bar(LEVARE)],
@@ -141,7 +141,7 @@ export const CHALLENGES: Challenge[] = [
     id: "levare-poi-battere",
     name: "Upbeat → Downbeat",
     difficulty: "facile",
-    toleranceMs: 90,
+    toleranceMs: 100,
     description:
       "The same pair as the previous challenge, but reversed: upbeat first, then immediately the downbeat.",
     quarterSegments: [...bar(LEVARE), ...bar(BATTERE)],
@@ -150,7 +150,7 @@ export const CHALLENGES: Challenge[] = [
     id: "battere-poi-sedicesimo2",
     name: "Downbeat → 2nd Sixteenth",
     difficulty: "medio",
-    toleranceMs: 80,
+    toleranceMs: 90,
     description:
       "One bar on the downbeat (the quarters), then immediately one bar on the second sixteenth of each quarter.",
     quarterSegments: [...bar(BATTERE), ...bar(SEDICESIMO_2)],
@@ -159,7 +159,7 @@ export const CHALLENGES: Challenge[] = [
     id: "battere-poi-terzina3",
     name: "Downbeat → 3rd Triplet",
     difficulty: "medio",
-    toleranceMs: 80,
+    toleranceMs: 90,
     description:
       "One bar on the downbeat (the quarters), then immediately one bar on the third note of each triplet.",
     quarterSegments: [...bar(BATTERE), ...bar(TERZINA_3)],
@@ -168,25 +168,30 @@ export const CHALLENGES: Challenge[] = [
     id: "levare-poi-sedicesimo2",
     name: "Upbeat → 2nd Sixteenth",
     difficulty: "difficile",
-    toleranceMs: 70,
+    toleranceMs: 80,
     description:
       "One bar on the upbeat (the off-beat eighths), then immediately one bar on the second sixteenth of each quarter.",
     quarterSegments: [...bar(LEVARE), ...bar(SEDICESIMO_2)],
   },
   {
-    id: "terzina2-poi-sedicesimo3",
-    name: "2nd Triplet → 3rd Sixteenth",
+    id: "giro-sedicesimi",
+    name: "1st → 2nd → 3rd → 4th Sixteenth",
     difficulty: "difficile",
-    toleranceMs: 70,
+    toleranceMs: 80,
     description:
-      "One bar on the second note of each triplet, then immediately one bar on the third sixteenth of each quarter.",
-    quarterSegments: [...bar(TERZINA_2), ...bar(SEDICESIMO_3)],
+      "Four bars in a row, one per sixteenth-note position within the beat: first the downbeat, then the second, third, and fourth sixteenth in turn.",
+    quarterSegments: [
+      ...bar(BATTERE),
+      ...bar(SEDICESIMO_2),
+      ...bar(SEDICESIMO_3),
+      ...bar(SEDICESIMO_4),
+    ],
   },
   {
     id: "battere-levare-terzina3",
     name: "Downbeat → Upbeat → 3rd Triplet",
     difficulty: "expert",
-    toleranceMs: 60,
+    toleranceMs: 70,
     description:
       "Three bars in a row, each with a different subdivision: quarters, then upbeat, then the third note of the triplet.",
     quarterSegments: [...bar(BATTERE), ...bar(LEVARE), ...bar(TERZINA_3)],
@@ -195,7 +200,7 @@ export const CHALLENGES: Challenge[] = [
     id: "alternanza-battuta",
     name: "Alternating Within a Bar",
     difficulty: "expert",
-    toleranceMs: 60,
+    toleranceMs: 70,
     description:
       "A single bar: the 1st and 3rd quarters are played on the downbeat, the 2nd and 4th on the second sixteenth — the subdivision change happens within the same bar.",
     quarterSegments: [BATTERE, SEDICESIMO_2, BATTERE, SEDICESIMO_2],
@@ -205,6 +210,7 @@ export const CHALLENGES: Challenge[] = [
 export type ChallengeHitResult = {
   label: string;
   onTime: boolean;
+  deltaMs: number | null;
 };
 
 export type ChallengeResult = {
@@ -250,6 +256,17 @@ export function scoreChallenge(
   // analyzeSession calls it took to fill each slot.
   const hits: (ChallengeHitResult | undefined)[] = new Array(totalQuarters);
 
+  // Buckets the previous bar's kept hits actually landed on — carried into
+  // this bar's analyzeSession calls (as excludedBuckets) so this bar's
+  // first hit can't re-claim a peak that belongs to the tail end of the
+  // previous bar. Only ever needs to span one bar back: analyzeSession's
+  // search windows never reach further than half a beat, so a bucket from
+  // two bars ago is already out of reach. Reset per bar (not accumulated
+  // across the whole challenge) so it never affects — and is never affected
+  // by — sibling groups sharing the *same* bar (see the Expert-2 comment
+  // below), only the bar that came immediately before.
+  let previousBarBuckets = new Set<number>();
+
   for (let barIndex = 0; barIndex < totalBars; barIndex++) {
     const barSegments = challenge.quarterSegments.slice(
       barIndex * BEATS_PER_BAR,
@@ -270,6 +287,15 @@ export function scoreChallenge(
       }
     });
 
+    // Buckets this bar's own kept hits land on — becomes previousBarBuckets
+    // for the *next* iteration. Deliberately a fresh set per bar, filled
+    // independently by every group in this bar (see the module-level
+    // comment on scoreChallenge: two groups sharing a bar already run
+    // fully independent analyzeSession calls, each only ever contributing
+    // its own quarters — this carries that same independence forward,
+    // it just also feeds the next bar).
+    const thisBarBuckets = new Set<number>();
+
     for (const { segment, quarterIndices } of groups.values()) {
       const { hitDiagnostics } = analyzeSession(
         waveform,
@@ -281,6 +307,7 @@ export function scoreChallenge(
         challenge.toleranceMs,
         1,
         leadInMs + barIndex * barDurationMs,
+        previousBarBuckets,
       );
 
       for (const quarterIndex of quarterIndices) {
@@ -290,8 +317,13 @@ export function scoreChallenge(
           `${segment.label} ${quarterIndex + 1}`,
           hit,
         );
+        if (hit?.bucket != null) {
+          thisBarBuckets.add(hit.bucket);
+        }
       }
     }
+
+    previousBarBuckets = thisBarBuckets;
   }
 
   const orderedHits = hits.filter(
@@ -304,5 +336,9 @@ function toHitResult(
   label: string,
   hit: HitDiagnostic | undefined,
 ): ChallengeHitResult {
-  return { label, onTime: hit !== undefined && hit.matched && hit.status === "onTime" };
+  return {
+    label,
+    onTime: hit !== undefined && hit.matched && hit.status === "onTime",
+    deltaMs: hit?.deltaMs ?? null,
+  };
 }
