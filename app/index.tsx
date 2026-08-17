@@ -13,6 +13,7 @@ import SyncRecorder, {
 } from "@/components/sync-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
 import TutorialScreen from "@/components/tutorial-screen";
+import WiredHeadphonesNotice from "@/components/wired-headphones-notice";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -220,6 +221,11 @@ export default function Home() {
   const [syncStatus, setSyncStatus] = useState<OnsetStatus | null>(null);
   const [syncOffsetMs, setSyncOffsetMs] = useState<number | null>(null);
 
+  // Shown before even the tutorial, on every launch, unless the user
+  // opted out via its own "Don't show this again" checkbox — see
+  // components/wired-headphones-notice.tsx, which self-checks AsyncStorage
+  // and calls back immediately without rendering if permanently dismissed.
+  const [showHeadphonesNotice, setShowHeadphonesNotice] = useState(true);
   // Shown once, before everything else (including the mic permission gate)
   // — see components/tutorial-screen.tsx, which self-checks AsyncStorage
   // and calls back immediately without rendering if already dismissed in a
@@ -388,6 +394,12 @@ export default function Home() {
     setCountInBeat(null);
     setPhase("recording");
   };
+
+  if (showHeadphonesNotice) {
+    return (
+      <WiredHeadphonesNotice onDone={() => setShowHeadphonesNotice(false)} />
+    );
+  }
 
   if (showTutorial) {
     return <TutorialScreen onDone={() => setShowTutorial(false)} />;

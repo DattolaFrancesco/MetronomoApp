@@ -20,3 +20,22 @@ export async function getHasSeenTutorial(): Promise<boolean> {
 export async function markTutorialSeen(): Promise<void> {
   await AsyncStorage.setItem(STORAGE_KEY, "true");
 }
+
+// Whether the user has permanently dismissed the wired-headphones notice
+// (components/wired-headphones-notice.tsx) via its "Don't show this again"
+// checkbox. Unlike the tutorial above, dismissing the notice *without*
+// checking that box doesn't persist anything — it's meant to reappear on
+// every launch until the user explicitly opts out.
+const WIRED_HEADPHONES_NOTICE_KEY = "onboarding:wiredHeadphonesNoticeDismissed";
+
+export async function getHasDismissedWiredHeadphonesNotice(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(WIRED_HEADPHONES_NOTICE_KEY)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function markWiredHeadphonesNoticeDismissed(): Promise<void> {
+  await AsyncStorage.setItem(WIRED_HEADPHONES_NOTICE_KEY, "true");
+}
