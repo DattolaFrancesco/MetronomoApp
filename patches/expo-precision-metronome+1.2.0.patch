@@ -1,0 +1,328 @@
+diff --git a/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt b/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
+index 2377c2f..552f09d 100644
+--- a/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
++++ b/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
+@@ -76,5 +76,11 @@ class ExpoPrecisionMetronomeModule : Module() {
+         AsyncFunction("setPattern") { pattern: List<BeatAccent> ->
+             engine?.setPattern(MetronomeEngine.encodePattern(pattern))
+         }
++
++        // TODO: not yet implemented on Android (no-op so JS callers stay
++        // safe cross-platform) — see the iOS MetronomeEngine's
++        // requestTapClick/renderTapClick for the reference implementation
++        // this needs to mirror through the C++ engine.
++        AsyncFunction("playTapClick") {}
+     }
+ }
+diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
+index 9ee05f7..13e800c 100644
+--- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
++++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
+@@ -6,6 +6,7 @@ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMet
+     setBpm(bpm: number): Promise<void>;
+     setSound(sound: SoundPreset): Promise<void>;
+     setPattern(pattern: BeatAccent[]): Promise<void>;
++    playTapClick(): Promise<void>;
+ }
+ declare const _default: ExpoPrecisionMetronomeModule;
+ export default _default;
+diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts
+index 6f66f65..61a3c9a 100644
+--- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts
++++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts
+@@ -6,6 +6,7 @@ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMet
+     setBpm(_bpm: number): Promise<void>;
+     setSound(_sound: string): Promise<void>;
+     setPattern(_pattern: string[]): Promise<void>;
++    playTapClick(): Promise<void>;
+ }
+ declare const _default: typeof ExpoPrecisionMetronomeModule;
+ export default _default;
+diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js
+index dad47c4..3e44882 100644
+--- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js
++++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js
+@@ -15,6 +15,9 @@ class ExpoPrecisionMetronomeModule extends NativeModule {
+     async setPattern(_pattern) {
+         throw new Error("ExpoPrecisionMetronome is not supported on web");
+     }
++    async playTapClick() {
++        throw new Error("ExpoPrecisionMetronome is not supported on web");
++    }
+ }
+ export default registerWebModule(ExpoPrecisionMetronomeModule, "ExpoPrecisionMetronomeModule");
+ //# sourceMappingURL=ExpoPrecisionMetronomeModule.web.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-precision-metronome/ios/ClickSynthesizer.swift b/node_modules/expo-precision-metronome/ios/ClickSynthesizer.swift
+index a9509d4..b71665f 100644
+--- a/node_modules/expo-precision-metronome/ios/ClickSynthesizer.swift
++++ b/node_modules/expo-precision-metronome/ios/ClickSynthesizer.swift
+@@ -98,6 +98,29 @@ enum ClickSynthesizer {
+         }
+     }
+ 
++    // Standalone, preset-independent decaying sine — used for the tap-input
++    // click (see MetronomeEngine's tapClick* state), which needs to mix
++    // additively into the same render buffer as the regular beat click
++    // (hence `+=`, matching renderSine above) without going through the
++    // BeatAccent/SoundPreset machinery the scheduled click uses.
++    static func renderRawSine(
++        into buffer: UnsafeMutablePointer<Float>,
++        startFrame: Int,
++        clickPhase: Int,
++        count: Int,
++        sampleRate: Double,
++        freq: Double,
++        decayTau: Double,
++        volume: Float = 1.0
++    ) {
++        guard count > 0 else { return }
++        let twoPiF = 2.0 * Double.pi * freq
++        for idx in 0..<count {
++            let phase = Double(clickPhase + idx) / sampleRate
++            buffer[startFrame + idx] += Float(sin(twoPiF * phase) * exp(-phase / decayTau)) * volume
++        }
++    }
++
+     private static func renderDualSine(
+         _ ctx: RenderContext,
+         freq1: Double,
+diff --git a/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift b/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
+index f0e30dc..82a6be8 100644
+--- a/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
++++ b/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
+@@ -57,5 +57,13 @@ public class ExpoPrecisionMetronomeModule: Module {
+         AsyncFunction("setPattern") { (pattern: [BeatAccent]) in
+             self.engine?.setPattern(pattern)
+         }
++
++        // Fire-and-forget tap-input feedback click — see MetronomeEngine's
++        // requestTapClick/renderTapClick. A no-op while the engine isn't
++        // running (before the metronome is started), which callers should
++        // treat as an acceptable best-effort miss, not an error.
++        AsyncFunction("playTapClick") {
++            self.engine?.requestTapClick()
++        }
+     }
+ }
+diff --git a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
+index 84cec22..c2adc62 100644
+--- a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
++++ b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
+@@ -18,6 +18,27 @@ final class MetronomeEngine {
+     // Accent params captured at click onset; used for multi-buffer continuation.
+     private var clickAccent: ClickSynthesizer.AccentParams = .normal
+ 
++    // Tap-input click: an independent, unscheduled click a JS caller can
++    // trigger on demand (see requestTapClick) — e.g. TapRecorder wants an
++    // audible confirmation on every on-screen button press, distinct in
++    // pitch from the regular beat click, but rendered through this same
++    // engine/session rather than a second audio player (a separate player
++    // fighting this engine over the shared iOS audio session was what broke
++    // the metronome the first time this was tried in JS — see
++    // components/tap-recorder.tsx's own history/comments).
++    //
++    // requestTapClick() is called from the JS/main thread; tapClickHandledCount
++    // and tapClickPhase are only ever touched on the audio render thread.
++    // Comparing the two counts (rather than a Bool flag) means a second tap
++    // that lands before the render thread has caught up to the first still
++    // registers as "another request" instead of being silently coalesced.
++    private var tapClickRequestCount: Int = 0
++    private var tapClickHandledCount: Int = 0
++    private var tapClickPhase: Int = -1
++    private static let tapClickDurationSeconds = 0.020
++    private static let tapClickFrequencyHz = 1_320.0
++    private static let tapClickDecayTau = 0.008
++
+     // Written from the JS thread, read from the audio render thread.
+     // On ARM64 (all iOS devices), an aligned 8-byte load/store is a single LDR/STR —
+     // hardware-atomic, no torn reads possible. No synchronisation primitive needed.
+@@ -55,10 +76,19 @@ final class MetronomeEngine {
+         currentPatternEncoded = MetronomeEngine.encode(pattern)
+     }
+ 
++    // Queues one tap click, picked up by the render callback on its next
++    // pass (see renderTapClick). A no-op while the engine isn't running —
++    // callers are expected to treat this as best-effort feedback, not
++    // something that needs to queue up across a start().
++    func requestTapClick() {
++        guard engine != nil else { return }
++        tapClickRequestCount += 1
++    }
++
+     /// `reason: nil` suppresses the onStop event — used by OnDestroy where JS is gone.
+     func stop(reason: String?) {
+         guard let eng = engine else { return }
+-        removeInterruptionObserver()
++        removeObservers()
+         eng.stop()
+         sourceNode = nil
+         engine = nil
+@@ -105,6 +135,9 @@ final class MetronomeEngine {
+         sampleRate = sr
+         currentSample = 0
+         clickPhase = -1
++        tapClickPhase = -1
++        tapClickRequestCount = 0
++        tapClickHandledCount = 0
+         scheduler.reset()
+ 
+         guard let format = AVAudioFormat(standardFormatWithSampleRate: sr, channels: 1) else {
+@@ -121,14 +154,46 @@ final class MetronomeEngine {
+         newEngine.attach(node)
+         newEngine.connect(node, to: newEngine.mainMixerNode, format: format)
+ 
+-        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+-        try AVAudioSession.sharedInstance().setActive(true)
++        // Don't force .playback here if the app already configured
++        // .playAndRecord (e.g. expo-audio's setAudioModeAsync, armed for a
++        // mic-based recording session) — downgrading it right as this
++        // engine starts, then having the app switch it back moments later,
++        // makes an already-active Bluetooth route renegotiate its profile
++        // twice in a row (A2DP <-> HFP) for no reason. That renegotiation
++        // is slow enough over Bluetooth to fire a real
++        // AVAudioSessionInterruption, which tears this engine back down
++        // (see handleInterruption) before it ever produces a click.
++        let session = AVAudioSession.sharedInstance()
++        if session.category != .playAndRecord {
++            try session.setCategory(.playback, mode: .default)
++        }
++        try session.setActive(true)
+         try newEngine.start()
+ 
+         sourceNode = node
+         engine = newEngine
+ 
+-        addInterruptionObserver()
++        addObservers(for: newEngine)
++    }
++
++    // Rebuilds the graph in place after the hardware configuration changes
++    // under us (see handleConfigurationChange) — same effect as a fresh
++    // start() (sample rate is re-read from the now-current route, scheduler
++    // and sample counters reset), just without tearing down the
++    // AVAudioSession or telling JS anything stopped.
++    private func relaunch() {
++        guard let oldEngine = engine else { return }
++        removeObservers()
++        oldEngine.stop()
++        sourceNode = nil
++        engine = nil
++        do {
++            try launchEngine()
++        } catch {
++            // Couldn't recover — tell JS so it doesn't sit frozen thinking
++            // playback is still going.
++            stopHandler?("interruption")
++        }
+     }
+ 
+     private func renderOngoingClick(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
+@@ -148,6 +213,37 @@ final class MetronomeEngine {
+         if clickPhase >= clickDurationSamples { clickPhase = -1 }
+     }
+ 
++    // Picks up a pending requestTapClick() call (if any) and renders/
++    // continues it — entirely independent of renderOngoingClick's beat-click
++    // state above, so a tap and a beat landing in the same buffer both play
++    // (renderRawSine mixes additively, like the regular click does).
++    private func renderTapClick(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
++        if tapClickRequestCount != tapClickHandledCount {
++            tapClickHandledCount = tapClickRequestCount
++            tapClickPhase = 0
++        }
++        guard tapClickPhase >= 0 else { return }
++
++        let durationSamples = Int(MetronomeEngine.tapClickDurationSeconds * sampleRate)
++        let remaining = durationSamples - tapClickPhase
++        let toWrite = min(remaining, frameCount)
++        guard toWrite > 0 else {
++            tapClickPhase = -1
++            return
++        }
++        ClickSynthesizer.renderRawSine(
++            into: buffer,
++            startFrame: 0,
++            clickPhase: tapClickPhase,
++            count: toWrite,
++            sampleRate: sampleRate,
++            freq: MetronomeEngine.tapClickFrequencyHz,
++            decayTau: MetronomeEngine.tapClickDecayTau
++        )
++        tapClickPhase += toWrite
++        if tapClickPhase >= durationSamples { tapClickPhase = -1 }
++    }
++
+     private func renderCallback(
+         frameCount: Int,
+         audioBufferList: UnsafeMutablePointer<AudioBufferList>
+@@ -162,6 +258,7 @@ final class MetronomeEngine {
+         let bufferStart = currentSample
+ 
+         renderOngoingClick(into: buffer, frameCount: frameCount)
++        renderTapClick(into: buffer, frameCount: frameCount)
+ 
+         if let (offset, beatNumber) = scheduler.nextBeat(
+             frameCount: frameCount,
+@@ -199,23 +296,41 @@ final class MetronomeEngine {
+         return noErr
+     }
+ 
+-    // MARK: - AVAudioSession interruption
++    // MARK: - AVAudioSession interruption / route changes
+ 
+-    private func addInterruptionObserver() {
++    private func addObservers(for engine: AVAudioEngine) {
+         NotificationCenter.default.addObserver(
+             self,
+             selector: #selector(handleInterruption(_:)),
+             name: AVAudioSession.interruptionNotification,
+             object: AVAudioSession.sharedInstance()
+         )
++        // Fires when the hardware's actual sample rate/channel layout
++        // changes under a running engine — e.g. a Bluetooth accessory that
++        // hadn't finished settling into its route yet when start() first
++        // queried outputNode.outputFormat(forBus:). Without reacting to
++        // this, the click keeps being synthesized against the stale rate
++        // captured at launch, so it plays back pitched up/down once the
++        // real route settles a moment later.
++        NotificationCenter.default.addObserver(
++            self,
++            selector: #selector(handleConfigurationChange(_:)),
++            name: .AVAudioEngineConfigurationChange,
++            object: engine
++        )
+     }
+ 
+-    private func removeInterruptionObserver() {
++    private func removeObservers() {
+         NotificationCenter.default.removeObserver(
+             self,
+             name: AVAudioSession.interruptionNotification,
+             object: nil
+         )
++        NotificationCenter.default.removeObserver(
++            self,
++            name: .AVAudioEngineConfigurationChange,
++            object: nil
++        )
+     }
+ 
+     @objc private func handleInterruption(_ notification: Notification) {
+@@ -229,7 +344,15 @@ final class MetronomeEngine {
+         stop(reason: "interruption")
+     }
+ 
++    // Posted on an unspecified thread — hop to main before touching engine/
++    // sourceNode, which are otherwise only ever written from the main thread.
++    @objc private func handleConfigurationChange(_ notification: Notification) {
++        DispatchQueue.main.async { [weak self] in
++            self?.relaunch()
++        }
++    }
++
+     deinit {
+-        removeInterruptionObserver()
++        removeObservers()
+     }
+ }

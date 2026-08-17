@@ -16,14 +16,18 @@ import ExpoPrecisionMetronomeModule, {
   type BeatEventPayload,
 } from "expo-precision-metronome";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, Text } from "react-native";
+import { Animated, Pressable, Text } from "react-native";
 
 // Same hold duration SyncRecorder's own live status flash uses — kept
 // separate (not imported) since it's a tiny, purely cosmetic constant, not
 // part of the shared comparison logic.
 const STATUS_HOLD_MS = 180;
 const ACCENT_COLOR = "#FF3B30";
-const TAP_BUTTON_HEIGHT = 120;
+const FLASH_DURATION_MS = 260;
+
+// Created once at module scope (not per-render) — Animated.createAnimatedComponent
+// wraps Pressable so its style can carry live Animated.Value-driven colors/shadow.
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 type TapRecorderProps = {
   // Same prop shape as components/sync-recorder.tsx's SyncRecorder — the
@@ -45,6 +49,13 @@ type TapRecorderProps = {
   ) => void;
   onRecordingStart?: () => void;
   onLimitReached?: () => void;
+  // Fired instead of handleTap when the button is pressed while not armed
+  // yet — lets the caller start the metronome/count-in from the very same
+  // press that will, once armed, start registering real taps. Optional so
+  // a caller that still drives its own separate Start button (see
+  // components/challenge-screen.tsx) keeps working unchanged: with no
+  // handler, an idle press just flashes and does nothing else.
+  onRequestStart?: () => void;
 };
 
 // Tap-input counterpart to SyncRecorder — same count-in/auto-stop
@@ -69,8 +80,16 @@ export default function TapRecorder({
   onStatusChange,
   onRecordingStart,
   onLimitReached,
+  onRequestStart,
 }: TapRecorderProps) {
   const [tapCount, setTapCount] = useState(0);
+  // Drives the button's flash/glow: snapped to 1 on every press (armed or
+  // not, scored or not — always the same red, no accuracy color-coding),
+  // then animated back down to 0 — see triggerFlash below. useState (not
+  // useRef) for the Animated.Value itself — same pattern session-setup.tsx's
+  // Carousel already uses, since interpolating it directly in the style
+  // below needs it to be a plain render-safe value, not a ref.
+  const [flashAnim] = useState(() => new Animated.Value(0));
 
   const bpmRef = useRef(bpm);
   const toleranceRef = useRef(toleranceMs);
@@ -84,6 +103,7 @@ export default function TapRecorder({
   const onStatusChangeRef = useRef(onStatusChange);
   const onRecordingStartRef = useRef(onRecordingStart);
   const onLimitReachedRef = useRef(onLimitReached);
+  const onRequestStartRef = useRef(onRequestStart);
 
   // "Beat 1" timestamp — elapsedMs=0 for every tap timestamp recorded
   // below, same role as SyncRecorder's own sessionStartRef.
@@ -134,6 +154,9 @@ export default function TapRecorder({
   useEffect(() => {
     onLimitReachedRef.current = onLimitReached;
   }, [onLimitReached]);
+  useEffect(() => {
+    onRequestStartRef.current = onRequestStart;
+  }, [onRequestStart]);
 
   function currentBeatIntervalMs() {
     return 60000 / bpmRef.current;
@@ -188,9 +211,49 @@ export default function TapRecorder({
     return () => subscription.remove();
   }, []);
 
-  function handleTap() {
-    if (!isArmedRef.current || !recordingStartedRef.current) return;
-    if (sessionStartRef.current === null) return;
+  // Every press flashes, regardless of whether it ends up scored — this is
+  // what makes the button feel responsive even during the count-in (before
+  // recordingStartedRef flips true) or on the very first press (which only
+  // starts the metronome, see handlePress below). Always the same red flash
+  // — no accuracy color-coding (that's what the live status readout and the
+  // Timing Analysis report are for).
+  function triggerFlash() {
+    flashAnim.stopAnimation();
+    flashAnim.setValue(1);
+    Animated.timing(flashAnim, {
+      toValue: 0,
+      duration: FLASH_DURATION_MS,
+      useNativeDriver: false,
+    }).start();
+  }
+
+  // The button's single onPress handler. While not armed yet, a press means
+  // "start" (see onRequestStart above) rather than a scored hit; once armed
+  // (count-in running or recording), it registers a tap — which itself
+  // still no-ops (after flashing) until the count-in has actually elapsed,
+  // i.e. recordingStartedRef is true. Kept as one function (not split into
+  // a separate handleTap called from here) so it stays the direct, provably
+  // event-only entry point for every Date.now()/ref read below.
+  //
+  // The click itself comes from expo-precision-metronome's own native
+  // engine (see its MetronomeEngine.requestTapClick/renderTapClick), not a
+  // second JS-side audio player — an earlier attempt at the latter fought
+  // the metronome's engine over the shared iOS audio session and stopped
+  // it dead after a couple of beats. Routed through the same engine, the
+  // tap click just mixes into the same buffer as the beat click. It's a
+  // fire-and-forget call: harmless (silently a no-op) if the engine isn't
+  // running yet, e.g. the very first press, which starts it.
+  function handlePress() {
+    triggerFlash();
+    ExpoPrecisionMetronomeModule.playTapClick();
+
+    if (!isArmedRef.current) {
+      onRequestStartRef.current?.();
+      return;
+    }
+    if (!recordingStartedRef.current || sessionStartRef.current === null) {
+      return;
+    }
 
     const now = Date.now();
     tapTimesRef.current.push(now - sessionStartRef.current);
@@ -287,36 +350,46 @@ export default function TapRecorder({
   }, []);
 
   return (
-    <DarkPanel className="px-4 py-4 gap-3 w-full">
+    <DarkPanel className="px-4 py-4 gap-3 w-full" style={{ flex: 1 }}>
       <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
         Input tap
       </Text>
 
-      <Pressable
-        onPress={handleTap}
-        disabled={!isArmed}
-        className="items-center justify-center rounded-2xl active:opacity-70"
+      <AnimatedPressable
+        onPress={handlePress}
+        className="items-center justify-center rounded-2xl active:opacity-80"
         style={{
-          height: TAP_BUTTON_HEIGHT,
+          flex: 1,
           borderWidth: 2,
           borderColor: ACCENT_COLOR,
-          backgroundColor: "rgba(255,59,48,0.12)",
-          opacity: isArmed ? 1 : 0.4,
+          backgroundColor: flashAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: ["rgba(255,59,48,0.12)", ACCENT_COLOR],
+          }),
+          shadowColor: ACCENT_COLOR,
+          shadowOpacity: flashAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, 0.9],
+          }),
+          shadowRadius: flashAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, 28],
+          }),
+          shadowOffset: { width: 0, height: 0 },
         }}
       >
-        <Text
-          className="text-2xl font-extrabold uppercase tracking-widest"
-          style={{ color: ACCENT_COLOR }}
-        >
+        <Text className="text-3xl font-extrabold uppercase tracking-widest text-white">
           Tap
         </Text>
-        <Text className="text-white/40 text-xs font-semibold mt-1">
+        <Text className="text-white/50 text-sm font-semibold mt-2">
           {tapCount} taps
         </Text>
-      </Pressable>
+      </AnimatedPressable>
 
       <Text className="text-neutral-600 text-xs leading-4">
-        Tap the button in time with the metronome — no microphone needed.
+        {isArmed
+          ? "Tap the button in time with the metronome."
+          : "Tap the button to start — no microphone needed."}
       </Text>
     </DarkPanel>
   );

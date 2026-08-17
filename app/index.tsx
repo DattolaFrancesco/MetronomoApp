@@ -413,7 +413,12 @@ export default function Home() {
   }
 
   if (showChallenges) {
-    return <ChallengeScreen onBack={() => setShowChallenges(false)} />;
+    return (
+      <ChallengeScreen
+        inputMode={inputMode}
+        onBack={() => setShowChallenges(false)}
+      />
+    );
   }
 
   if (report) {
@@ -483,7 +488,7 @@ export default function Home() {
       style={{ flex: 1 }}
     >
       <View
-        className="flex-1 px-5 justify-between"
+        className="flex-1 px-5 justify-between gap-6"
         style={{
           paddingTop: insets.top + 16,
           paddingBottom: insets.bottom + 24,
@@ -571,88 +576,111 @@ export default function Home() {
         )}
 
         {inputMode === "tap" ? (
-          <TapRecorder
-            isArmed={phase !== "idle"}
-            countInBeats={COUNT_IN_BEATS}
-            bpm={bpm}
-            subdivision={setupSubdivision}
-            tripletTarget={tripletTarget}
-            sixteenthTarget={sixteenthTarget}
-            toleranceMs={toleranceMs}
-            maxBars={setupBars}
-            onSessionEnd={handleSessionEnd}
-            onStatusChange={handleStatusChange}
-            onRecordingStart={handleRecordingStart}
-            onLimitReached={handleLimitReached}
-          />
+          <>
+            <View className="items-center">
+              <Text className="text-7xl font-bold text-white">{bpm}</Text>
+              <Text
+                className="text-xs font-bold tracking-widest mt-1"
+                style={{ color: ACCENT_COLOR }}
+              >
+                BPM
+              </Text>
+            </View>
+
+            {/* Stays mounted (just disabled once armed) — same as the
+                Microphone branch below. Unmounting it exactly when a tap
+                arms the recorder risked tearing down its gesture/reanimated
+                state mid-transition. */}
+            <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
+
+            <View style={{ flex: 1 }}>
+              <TapRecorder
+                isArmed={phase !== "idle"}
+                countInBeats={COUNT_IN_BEATS}
+                bpm={bpm}
+                subdivision={setupSubdivision}
+                tripletTarget={tripletTarget}
+                sixteenthTarget={sixteenthTarget}
+                toleranceMs={toleranceMs}
+                maxBars={setupBars}
+                onSessionEnd={handleSessionEnd}
+                onStatusChange={handleStatusChange}
+                onRecordingStart={handleRecordingStart}
+                onLimitReached={handleLimitReached}
+                onRequestStart={togglePlay}
+              />
+            </View>
+          </>
         ) : (
-          <SyncRecorder
-            isArmed={phase !== "idle"}
-            countInBeats={COUNT_IN_BEATS}
-            bpm={bpm}
-            subdivision={setupSubdivision}
-            tripletTarget={tripletTarget}
-            sixteenthTarget={sixteenthTarget}
-            toleranceMs={toleranceMs}
-            maxBars={setupBars}
-            onSessionEnd={handleSessionEnd}
-            onStatusChange={handleStatusChange}
-            onRecordingStart={handleRecordingStart}
-            onLimitReached={handleLimitReached}
-          />
-        )}
-
-        <View className="items-center">
-          <Text className="text-7xl font-bold text-white">{bpm}</Text>
-          <Text
-            className="text-xs font-bold tracking-widest mt-1"
-            style={{ color: ACCENT_COLOR }}
-          >
-            BPM
-          </Text>
-        </View>
-
-        <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
-
-        <Pressable
-          onPress={togglePlay}
-          className="self-stretch py-5 rounded-2xl items-center justify-center active:opacity-70 border-2 flex-row gap-2.5"
-          style={{
-            borderColor: ACCENT_COLOR,
-            shadowColor: ACCENT_COLOR,
-            shadowOpacity: 0.5,
-            shadowRadius: 14,
-            shadowOffset: { width: 0, height: 0 },
-          }}
-        >
-          {phase !== "idle" ? (
-            <View style={{ width: 16, height: 16, borderRadius: 3, backgroundColor: ACCENT_COLOR }} />
-          ) : (
-            <View
-              style={{
-                width: 0,
-                height: 0,
-                borderTopWidth: 9,
-                borderBottomWidth: 9,
-                borderLeftWidth: 14,
-                borderTopColor: "transparent",
-                borderBottomColor: "transparent",
-                borderLeftColor: ACCENT_COLOR,
-              }}
+          <>
+            <SyncRecorder
+              isArmed={phase !== "idle"}
+              countInBeats={COUNT_IN_BEATS}
+              bpm={bpm}
+              subdivision={setupSubdivision}
+              tripletTarget={tripletTarget}
+              sixteenthTarget={sixteenthTarget}
+              toleranceMs={toleranceMs}
+              maxBars={setupBars}
+              onSessionEnd={handleSessionEnd}
+              onStatusChange={handleStatusChange}
+              onRecordingStart={handleRecordingStart}
+              onLimitReached={handleLimitReached}
             />
-          )}
-          <Text
-            className="text-xl font-extrabold uppercase tracking-widest"
-            style={{
-              color: ACCENT_COLOR,
-              textShadowColor: "rgba(255,59,48,0.6)",
-              textShadowRadius: 12,
-              textShadowOffset: { width: 0, height: 0 },
-            }}
-          >
-            {phase !== "idle" ? "Stop" : "Start"}
-          </Text>
-        </Pressable>
+
+            <View className="items-center">
+              <Text className="text-7xl font-bold text-white">{bpm}</Text>
+              <Text
+                className="text-xs font-bold tracking-widest mt-1"
+                style={{ color: ACCENT_COLOR }}
+              >
+                BPM
+              </Text>
+            </View>
+
+            <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
+
+            <Pressable
+              onPress={togglePlay}
+              className="self-stretch py-5 rounded-2xl items-center justify-center active:opacity-70 border-2 flex-row gap-2.5"
+              style={{
+                borderColor: ACCENT_COLOR,
+                shadowColor: ACCENT_COLOR,
+                shadowOpacity: 0.5,
+                shadowRadius: 14,
+                shadowOffset: { width: 0, height: 0 },
+              }}
+            >
+              {phase !== "idle" ? (
+                <View style={{ width: 16, height: 16, borderRadius: 3, backgroundColor: ACCENT_COLOR }} />
+              ) : (
+                <View
+                  style={{
+                    width: 0,
+                    height: 0,
+                    borderTopWidth: 9,
+                    borderBottomWidth: 9,
+                    borderLeftWidth: 14,
+                    borderTopColor: "transparent",
+                    borderBottomColor: "transparent",
+                    borderLeftColor: ACCENT_COLOR,
+                  }}
+                />
+              )}
+              <Text
+                className="text-xl font-extrabold uppercase tracking-widest"
+                style={{
+                  color: ACCENT_COLOR,
+                  textShadowColor: "rgba(255,59,48,0.6)",
+                  textShadowRadius: 12,
+                  textShadowOffset: { width: 0, height: 0 },
+                }}
+              >
+                {phase !== "idle" ? "Stop" : "Start"}
+              </Text>
+            </Pressable>
+          </>
+        )}
       </View>
     </LinearGradient>
   );

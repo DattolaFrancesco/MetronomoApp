@@ -38,11 +38,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // Self-contained sibling to the free-session flow in app/index.tsx — its
 // own local list/session/report state machine, mounted/unmounted as a
-// whole from Home via a single "showChallenges" flag. Deliberately does
-// not touch app/index.tsx's own state, SyncRecorder, or lib/rhythm-
+// whole from Home via a single "showChallenges" flag. Deliberately doesn't
+// touch app/index.tsx's own state, SyncRecorder, or lib/rhythm-
 // detection.ts: every "already validated" piece of logic it needs
 // (peak detection, timestamp math, analyzeSession) is reused exactly as
-// free mode uses it, just recomposed — see lib/challenges.ts.
+// free mode uses it, just recomposed — see lib/challenges.ts. The one
+// exception is inputMode (Mic vs Tap): that's asked once on the setup
+// screen, not re-asked here, so Home passes its own choice straight
+// through as a prop instead of this file owning a second copy of it.
 
 const ACCENT_COLOR = "#FF3B30";
 const SUCCESS_COLOR = "#39FF6A";
@@ -83,9 +86,13 @@ function DifficultyBadge({ difficulty }: { difficulty: ChallengeDifficulty }) {
 
 type ChallengeScreenProps = {
   onBack: () => void;
+  // Mic vs Tap — chosen once on the free-session setup screen (see
+  // components/session-setup.tsx) and passed straight through here rather
+  // than asked again: no separate Challenge-only toggle anymore.
+  inputMode: InputSource;
 };
 
-export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
+export default function ChallengeScreen({ onBack, inputMode }: ChallengeScreenProps) {
   const [activeChallenge, setActiveChallenge] = useState<Challenge | null>(null);
   const [completedIds, setCompletedIds] = useState<Set<ChallengeId>>(new Set());
   // Replaying the achievement screen on demand (from the list, once every
@@ -118,6 +125,7 @@ export default function ChallengeScreen({ onBack }: ChallengeScreenProps) {
     return (
       <ChallengeSession
         challenge={activeChallenge}
+        inputMode={inputMode}
         onBack={() => setActiveChallenge(null)}
       />
     );
@@ -242,9 +250,11 @@ function ChallengeList({
 
 function ChallengeSession({
   challenge,
+  inputMode,
   onBack,
 }: {
   challenge: Challenge;
+  inputMode: InputSource;
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -257,13 +267,6 @@ function ChallengeSession({
   // to show TimingMasterScreen instead of leaving straight back to the list.
   const [masteryPending, setMasteryPending] = useState(false);
   const [showMastery, setShowMastery] = useState(false);
-  // Mic (default) vs Tap — fully independent of app/index.tsx's own
-  // inputMode (see this file's own header comment on why Challenge never
-  // shares state with the free-session flow). No permission gate needed
-  // here at all: ChallengeSession is only ever reached once Home has
-  // already granted mic access, and Tap mode never needs it in the first
-  // place.
-  const [inputMode, setInputMode] = useState<InputSource>("microphone");
 
   const phaseRef = useRef<Phase>("idle");
   // Guards handleStart/handleStop against a double-tap firing both before
@@ -414,7 +417,7 @@ function ChallengeSession({
       style={{ flex: 1 }}
     >
       <View
-        className="flex-1 px-5 justify-between"
+        className="flex-1 px-5 justify-between gap-6"
         style={{
           paddingTop: insets.top + 16,
           paddingBottom: insets.bottom + 24,
@@ -463,127 +466,107 @@ function ChallengeSession({
 
         {phase !== "idle" && <BeatIndicator isActive />}
 
-        {/* Same as the free-session setup screen's Mic/Tap toggle — only
-            changeable before Start, same lock-in reasoning as bpm/tolerance
-            elsewhere on this screen. */}
-        {phase === "idle" && (
-          <View className="flex-row gap-2">
+        {inputMode === "tap" ? (
+          <>
+            <View className="items-center">
+              <Text className="text-7xl font-bold text-white">{bpm}</Text>
+              <Text
+                className="text-xs font-bold tracking-widest mt-1"
+                style={{ color: ACCENT_COLOR }}
+              >
+                BPM
+              </Text>
+            </View>
+
+            {/* Stays mounted (just disabled once armed) — same as the
+                Microphone branch below and as app/index.tsx's own tap
+                screen. Unmounting it exactly when a tap arms the recorder
+                risked tearing down its gesture/reanimated state mid-
+                transition. */}
+            <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
+
+            <View style={{ flex: 1 }}>
+              <TapRecorder
+                isArmed={phase !== "idle"}
+                countInBeats={COUNT_IN_BEATS}
+                bpm={bpm}
+                subdivision="quarter"
+                toleranceMs={challenge.toleranceMs}
+                maxBars={challengeBars(challenge)}
+                onSessionEnd={handleSessionEnd}
+                onRecordingStart={handleRecordingStart}
+                onLimitReached={handleLimitReached}
+                onRequestStart={handleStart}
+              />
+            </View>
+          </>
+        ) : (
+          <>
+            <SyncRecorder
+              isArmed={phase !== "idle"}
+              countInBeats={COUNT_IN_BEATS}
+              bpm={bpm}
+              subdivision="quarter"
+              toleranceMs={challenge.toleranceMs}
+              maxBars={challengeBars(challenge)}
+              onSessionEnd={handleSessionEnd}
+              onRecordingStart={handleRecordingStart}
+              onLimitReached={handleLimitReached}
+            />
+
+            <View className="items-center">
+              <Text className="text-7xl font-bold text-white">{bpm}</Text>
+              <Text
+                className="text-xs font-bold tracking-widest mt-1"
+                style={{ color: ACCENT_COLOR }}
+              >
+                BPM
+              </Text>
+            </View>
+
+            <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
+
             <Pressable
-              onPress={() => setInputMode("microphone")}
-              className="flex-1 py-2 rounded-xl items-center active:opacity-60"
+              onPress={phase !== "idle" ? handleStop : handleStart}
+              className="self-stretch py-5 rounded-2xl items-center justify-center active:opacity-70 border-2 flex-row gap-2.5"
               style={{
-                borderWidth: 2,
-                borderColor:
-                  inputMode === "microphone" ? ACCENT_COLOR : "rgba(255,255,255,0.15)",
-                backgroundColor:
-                  inputMode === "microphone" ? "rgba(255,59,48,0.12)" : "transparent",
+                borderColor: ACCENT_COLOR,
+                shadowColor: ACCENT_COLOR,
+                shadowOpacity: 0.5,
+                shadowRadius: 14,
+                shadowOffset: { width: 0, height: 0 },
               }}
             >
+              {phase !== "idle" ? (
+                <View style={{ width: 16, height: 16, borderRadius: 3, backgroundColor: ACCENT_COLOR }} />
+              ) : (
+                <View
+                  style={{
+                    width: 0,
+                    height: 0,
+                    borderTopWidth: 9,
+                    borderBottomWidth: 9,
+                    borderLeftWidth: 14,
+                    borderTopColor: "transparent",
+                    borderBottomColor: "transparent",
+                    borderLeftColor: ACCENT_COLOR,
+                  }}
+                />
+              )}
               <Text
-                className="text-[11px] font-bold uppercase tracking-widest"
+                className="text-xl font-extrabold uppercase tracking-widest"
                 style={{
-                  color: inputMode === "microphone" ? ACCENT_COLOR : "#8E8E93",
+                  color: ACCENT_COLOR,
+                  textShadowColor: "rgba(255,59,48,0.6)",
+                  textShadowRadius: 12,
+                  textShadowOffset: { width: 0, height: 0 },
                 }}
               >
-                Microphone
+                {phase !== "idle" ? "Stop" : "Start"}
               </Text>
             </Pressable>
-            <Pressable
-              onPress={() => setInputMode("tap")}
-              className="flex-1 py-2 rounded-xl items-center active:opacity-60"
-              style={{
-                borderWidth: 2,
-                borderColor: inputMode === "tap" ? ACCENT_COLOR : "rgba(255,255,255,0.15)",
-                backgroundColor: inputMode === "tap" ? "rgba(255,59,48,0.12)" : "transparent",
-              }}
-            >
-              <Text
-                className="text-[11px] font-bold uppercase tracking-widest"
-                style={{ color: inputMode === "tap" ? ACCENT_COLOR : "#8E8E93" }}
-              >
-                Tap
-              </Text>
-            </Pressable>
-          </View>
+          </>
         )}
-
-        {inputMode === "tap" ? (
-          <TapRecorder
-            isArmed={phase !== "idle"}
-            countInBeats={COUNT_IN_BEATS}
-            bpm={bpm}
-            subdivision="quarter"
-            toleranceMs={challenge.toleranceMs}
-            maxBars={challengeBars(challenge)}
-            onSessionEnd={handleSessionEnd}
-            onRecordingStart={handleRecordingStart}
-            onLimitReached={handleLimitReached}
-          />
-        ) : (
-          <SyncRecorder
-            isArmed={phase !== "idle"}
-            countInBeats={COUNT_IN_BEATS}
-            bpm={bpm}
-            subdivision="quarter"
-            toleranceMs={challenge.toleranceMs}
-            maxBars={challengeBars(challenge)}
-            onSessionEnd={handleSessionEnd}
-            onRecordingStart={handleRecordingStart}
-            onLimitReached={handleLimitReached}
-          />
-        )}
-
-        <View className="items-center">
-          <Text className="text-7xl font-bold text-white">{bpm}</Text>
-          <Text
-            className="text-xs font-bold tracking-widest mt-1"
-            style={{ color: ACCENT_COLOR }}
-          >
-            BPM
-          </Text>
-        </View>
-
-        <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
-
-        <Pressable
-          onPress={phase !== "idle" ? handleStop : handleStart}
-          className="self-stretch py-5 rounded-2xl items-center justify-center active:opacity-70 border-2 flex-row gap-2.5"
-          style={{
-            borderColor: ACCENT_COLOR,
-            shadowColor: ACCENT_COLOR,
-            shadowOpacity: 0.5,
-            shadowRadius: 14,
-            shadowOffset: { width: 0, height: 0 },
-          }}
-        >
-          {phase !== "idle" ? (
-            <View style={{ width: 16, height: 16, borderRadius: 3, backgroundColor: ACCENT_COLOR }} />
-          ) : (
-            <View
-              style={{
-                width: 0,
-                height: 0,
-                borderTopWidth: 9,
-                borderBottomWidth: 9,
-                borderLeftWidth: 14,
-                borderTopColor: "transparent",
-                borderBottomColor: "transparent",
-                borderLeftColor: ACCENT_COLOR,
-              }}
-            />
-          )}
-          <Text
-            className="text-xl font-extrabold uppercase tracking-widest"
-            style={{
-              color: ACCENT_COLOR,
-              textShadowColor: "rgba(255,59,48,0.6)",
-              textShadowRadius: 12,
-              textShadowOffset: { width: 0, height: 0 },
-            }}
-          >
-            {phase !== "idle" ? "Stop" : "Start"}
-          </Text>
-        </Pressable>
       </View>
     </LinearGradient>
   );
