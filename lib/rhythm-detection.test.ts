@@ -1,5 +1,6 @@
 import {
   analyzeSession,
+  analyzeTapSession,
   classifyOnset,
   computeClickGateEnd,
   computeExpectedHits,
@@ -7,6 +8,7 @@ import {
   evaluatedSubBeats,
   findOnsetPeaks,
   isWithinClickGate,
+  matchTapsToExpectedHits,
   MIN_PEAK_AMPLITUDE,
   pickPeakInRange,
   primarySubBeat,
@@ -393,5 +395,155 @@ describe("analyzeSession — sixteenth-note single-target filtering (same end-to
     expect(events[0].subBeatIndex).toBe(1);
     expect(events[0].deltaMs).toBeCloseTo(225, 0);
     expect(events[0].status).toBe("late");
+  });
+});
+
+describe("matchTapsToExpectedHits — tap-mode matching", () => {
+  const RADIUS = 250; // e.g. half a 500ms beat interval (120 BPM)
+
+  test("a tap exactly on an expected time is onTime with deltaMs 0", () => {
+    const expectedHits = [{ beatIndex: 0, subBeatIndex: 0, time: 1000 }];
+    const { events, hitDiagnostics } = matchTapsToExpectedHits(
+      expectedHits,
+      [1000],
+      90,
+      RADIUS,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].deltaMs).toBe(0);
+    expect(events[0].status).toBe("onTime");
+    expect(hitDiagnostics[0].matched).toBe(true);
+  });
+
+  test("a tap inside matchRadius but outside tolerance is early/late, still matched", () => {
+    const expectedHits = [{ beatIndex: 0, subBeatIndex: 0, time: 1000 }];
+    const { events } = matchTapsToExpectedHits(expectedHits, [1150], 90, RADIUS);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].deltaMs).toBe(150);
+    expect(events[0].status).toBe("late");
+  });
+
+  test("a tap outside matchRadius is never matched, regardless of tolerance", () => {
+    const expectedHits = [{ beatIndex: 0, subBeatIndex: 0, time: 1000 }];
+    const { events, hitDiagnostics } = matchTapsToExpectedHits(
+      expectedHits,
+      [1300], // 300ms away, radius is 250
+      1000, // tolerance deliberately huge — radius still wins
+      RADIUS,
+    );
+
+    expect(events).toHaveLength(0);
+    expect(hitDiagnostics[0].matched).toBe(false);
+    expect(hitDiagnostics[0].deltaMs).toBeNull();
+    expect(hitDiagnostics[0].status).toBeNull();
+  });
+
+  test("earlier expected hits claim a shared tap first, leaving a later hit unmatched", () => {
+    // Two expected hits 200ms apart, a single tap sits exactly between them
+    // (100ms from each) — both are within RADIUS, so whichever hit is
+    // listed first wins it.
+    const expectedHits = [
+      { beatIndex: 0, subBeatIndex: 0, time: 1000 },
+      { beatIndex: 1, subBeatIndex: 0, time: 1200 },
+    ];
+    const { events, hitDiagnostics } = matchTapsToExpectedHits(
+      expectedHits,
+      [1100],
+      90,
+      RADIUS,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].beatIndex).toBe(0);
+    expect(hitDiagnostics[0].matched).toBe(true);
+    expect(hitDiagnostics[1].matched).toBe(false);
+  });
+
+  test("the closest unclaimed tap wins, not just the first one in array order", () => {
+    const expectedHits = [{ beatIndex: 0, subBeatIndex: 0, time: 1000 }];
+    // First tap in the array is farther away than the second.
+    const { events } = matchTapsToExpectedHits(
+      expectedHits,
+      [1200, 1050],
+      90,
+      RADIUS,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].deltaMs).toBe(50);
+  });
+
+  test("extra taps that no expected hit claims produce no spurious events", () => {
+    const expectedHits = [{ beatIndex: 0, subBeatIndex: 0, time: 1000 }];
+    const { events } = matchTapsToExpectedHits(
+      expectedHits,
+      [1000, 5000, 9000], // only the first is anywhere near the one hit
+      90,
+      RADIUS,
+    );
+
+    expect(events).toHaveLength(1);
+  });
+});
+
+describe("analyzeTapSession — end-to-end tap-mode session", () => {
+  test("quarter subdivision: on-time, early, and missed hits over one bar", () => {
+    // 120 BPM: beatIntervalMs = 500, quarters at 0/500/1000/1500.
+    const tapTimesMs = [
+      0, // beat 0: dead on time
+      520, // beat 1: 20ms late, still onTime (tolerance 90)
+      // beat 2 (1000ms): no tap at all — missed
+      1620, // beat 3 (1500ms): 120ms late — outside tolerance
+    ];
+
+    const { events, hitDiagnostics } = analyzeTapSession(
+      tapTimesMs,
+      2000,
+      120,
+      "quarter",
+      2,
+      2,
+      90,
+      1, // maxBars
+    );
+
+    expect(hitDiagnostics).toHaveLength(4);
+    expect(events).toHaveLength(3);
+
+    const beat2 = hitDiagnostics.find((h) => h.beatIndex === 2);
+    expect(beat2!.matched).toBe(false);
+
+    const beat3Event = events.find((e) => e.beatIndex === 3);
+    expect(beat3Event!.status).toBe("late");
+    expect(beat3Event!.deltaMs).toBeCloseTo(120, 0);
+  });
+
+  test("maxBars caps totalQuarters exactly like analyzeSession — no phantom extra hit", () => {
+    const { hitDiagnostics } = analyzeTapSession([], 2000, 120, "quarter", 2, 2, 90, 1);
+    expect(hitDiagnostics).toHaveLength(4); // exactly BEATS_PER_BAR * 1 bar
+  });
+
+  test("sixteenth subdivision only evaluates the chosen sub-beat, same as analyzeSession", () => {
+    const beatIntervalMs = 500; // 120 BPM
+    const subIntervalMs = beatIntervalMs / 4;
+    const tapTimesMs = [subIntervalMs]; // right on the 2nd sixteenth of beat 0
+
+    const { events, hitDiagnostics } = analyzeTapSession(
+      tapTimesMs,
+      2000,
+      120,
+      "sixteenth",
+      2,
+      2, // sixteenthTarget 2 -> sub-beat index 1
+      90,
+      1,
+    );
+
+    expect(hitDiagnostics.every((h) => h.subBeatIndex === 1)).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(events[0].deltaMs).toBeCloseTo(0, 0);
+    expect(events[0].status).toBe("onTime");
   });
 });

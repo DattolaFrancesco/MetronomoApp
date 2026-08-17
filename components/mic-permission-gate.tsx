@@ -10,6 +10,11 @@ const ACCENT_COLOR = "#FF3B30";
 
 type Props = {
   onGranted: () => void;
+  // Escape hatch: lets the user pick Tap mode (no microphone needed at
+  // all — see components/tap-recorder.tsx) instead of granting/retrying
+  // mic access. Optional so any other caller of this gate keeps compiling
+  // unchanged if Tap mode isn't wired up for it.
+  onUseTapInstead?: () => void;
 };
 
 // Shown in place of the setup screen until microphone access is granted.
@@ -17,7 +22,7 @@ type Props = {
 // been asked before ("undetermined"), triggers the native prompt right
 // away — the message below only becomes visible if that prompt is denied
 // or was already denied in a previous session.
-export default function MicPermissionGate({ onGranted }: Props) {
+export default function MicPermissionGate({ onGranted, onUseTapInstead }: Props) {
   const [checking, setChecking] = useState(true);
   const [canAskAgain, setCanAskAgain] = useState(true);
 
@@ -91,6 +96,14 @@ export default function MicPermissionGate({ onGranted }: Props) {
           {canAskAgain ? "Allow access" : "Open settings"}
         </Text>
       </Pressable>
+
+      {onUseTapInstead && (
+        <Pressable onPress={onUseTapInstead} className="active:opacity-60">
+          <Text className="text-white/50 text-sm font-semibold underline">
+            Use Tap instead — no microphone needed
+          </Text>
+        </Pressable>
+      )}
     </View>
   );
 }

@@ -52,8 +52,15 @@ const WAVEFORM_FILL_COLOR = "rgba(255,138,128,0.35)";
 // One line per accepted onset, on-time or not — the chips/stat counts in
 // session-report.tsx already carry the accuracy color-coding; this chart's
 // job is just to show *where* each real hit landed against the grid, so
-// every event gets the same accent color regardless of status.
+// every event gets the same accent color regardless of status. Microphone-
+// mode only — a tap has no amplitude/threshold ambiguity behind it, so tap
+// sessions color each line by its own status instead (see
+// TAP_ONTIME_COLOR/TAP_OFFTIME_COLOR below).
 const ONSET_LINE_COLOR = "#FF3B30";
+// Same green already used for "on time"/success elsewhere in the app (see
+// SUCCESS_COLOR in components/challenge-screen.tsx).
+const TAP_ONTIME_COLOR = "#39FF6A";
+const TAP_OFFTIME_COLOR = "#FF3B30";
 
 type BarRow = {
   barNumber: number;
@@ -68,7 +75,13 @@ type BarRow = {
   // "eighth", so it's always safe to include in the Canvas below.
   subdivisionSecondaryTickPath: SkPath;
   barlinePath: SkPath;
+  // Microphone-mode onset lines (single fixed color) — always empty for a
+  // tap-mode summary, which uses tapOnTimePath/tapOffTimePath instead. Both
+  // pairs are always safe to include in the Canvas below, same reasoning
+  // as subdivisionSecondaryTickPath above.
   onsetPath: SkPath;
+  tapOnTimePath: SkPath;
+  tapOffTimePath: SkPath;
   quarterLabels: { x: number; label: string }[];
 };
 
@@ -157,7 +170,7 @@ export default function DebugChart({
       // waveform-relative (index 0 = true time -leadInMs), so bar-relative
       // true time needs +leadInMs to land on the right bucket.
       const waveformPath = Skia.Path.Make();
-      if (summary.waveform.length > 0) {
+      if (summary.inputSource !== "tap" && summary.waveform.length > 0) {
         const firstBucket = Math.max(
           0,
           Math.floor((barStart + leadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS) - 1,
@@ -255,12 +268,24 @@ export default function DebugChart({
       barlinePath.lineTo(barlineX, TOP_LABEL_LANE + CHART_HEIGHT);
 
       const onsetPath = Skia.Path.Make();
+      const tapOnTimePath = Skia.Path.Make();
+      const tapOffTimePath = Skia.Path.Make();
       for (const event of summary.events) {
         const t = event.elapsedMs + event.deltaMs;
         if (t < barStart || t >= barEnd) continue;
         const x = (t - barStart) * rowPxPerMs;
-        onsetPath.moveTo(x, TOP_LABEL_LANE);
-        onsetPath.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
+        // Tap mode: exact press timestamp, colored by its own status
+        // (matching lib/rhythm-detection.ts's classifyOnset — no amplitude/
+        // threshold ambiguity to search for, unlike a mic hit). Mic mode:
+        // unchanged single-color line, same as before this feature existed.
+        const path =
+          summary.inputSource === "tap"
+            ? event.status === "onTime"
+              ? tapOnTimePath
+              : tapOffTimePath
+            : onsetPath;
+        path.moveTo(x, TOP_LABEL_LANE);
+        path.lineTo(x, TOP_LABEL_LANE + CHART_HEIGHT);
       }
 
       result.push({
@@ -271,6 +296,8 @@ export default function DebugChart({
         subdivisionSecondaryTickPath,
         barlinePath,
         onsetPath,
+        tapOnTimePath,
+        tapOffTimePath,
         quarterLabels,
       });
     }
@@ -285,6 +312,7 @@ export default function DebugChart({
     summary.maxBars,
     summary.leadInMs,
     summary.subdivision,
+    summary.inputSource,
   ]);
 
   return (
@@ -292,11 +320,17 @@ export default function DebugChart({
       {showDescription && (
         <>
           <Text className="text-neutral-600 text-[10px] leading-4">
-            {summary.subdivision === "triplet"
-              ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. The solid red line is the peak detected by the microphone."
-              : summary.subdivision === "sixteenth"
-                ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. The solid red line is the peak detected by the microphone."
-                : "The numbered white lines mark the quarters, the short dashes the sixteenths. The solid red line is the peak detected by the microphone."}
+            {summary.inputSource === "tap"
+              ? summary.subdivision === "triplet"
+                ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. Each line is a tap — green if on time, red if outside tolerance."
+                : summary.subdivision === "sixteenth"
+                  ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. Each line is a tap — green if on time, red if outside tolerance."
+                  : "The numbered white lines mark the quarters, the short dashes the sixteenths. Each line is a tap — green if on time, red if outside tolerance."
+              : summary.subdivision === "triplet"
+                ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. The solid red line is the peak detected by the microphone."
+                : summary.subdivision === "sixteenth"
+                  ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. The solid red line is the peak detected by the microphone."
+                  : "The numbered white lines mark the quarters, the short dashes the sixteenths. The solid red line is the peak detected by the microphone."}
           </Text>
 
           <View className="flex-row flex-wrap gap-x-3 gap-y-1">
@@ -311,7 +345,14 @@ export default function DebugChart({
                 }
               />
             )}
-            <LegendLine color={ONSET_LINE_COLOR} label="hit" />
+            {summary.inputSource === "tap" ? (
+              <>
+                <LegendLine color={TAP_ONTIME_COLOR} label="on time" />
+                <LegendLine color={TAP_OFFTIME_COLOR} label="out of tolerance" />
+              </>
+            ) : (
+              <LegendLine color={ONSET_LINE_COLOR} label="hit" />
+            )}
           </View>
         </>
       )}
@@ -332,6 +373,8 @@ export default function DebugChart({
                 <Path path={row.quarterTickPath} color={QUARTER_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.barlinePath} color={BARLINE_COLOR} style="stroke" strokeWidth={2} />
                 <Path path={row.onsetPath} color={ONSET_LINE_COLOR} style="stroke" strokeWidth={2} />
+                <Path path={row.tapOnTimePath} color={TAP_ONTIME_COLOR} style="stroke" strokeWidth={2} />
+                <Path path={row.tapOffTimePath} color={TAP_OFFTIME_COLOR} style="stroke" strokeWidth={2} />
               </Canvas>
 
               {/* Numeric labels only — the lines/waveform themselves are

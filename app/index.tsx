@@ -11,9 +11,11 @@ import SyncRecorder, {
   type Subdivision,
   type TripletTarget,
 } from "@/components/sync-recorder";
+import TapRecorder from "@/components/tap-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
 import TutorialScreen from "@/components/tutorial-screen";
 import WiredHeadphonesNotice from "@/components/wired-headphones-notice";
+import type { InputSource } from "@/lib/rhythm-detection";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -243,6 +245,11 @@ export default function Home() {
   // components/mic-permission-gate.tsx, which also fires the native
   // permission prompt itself the first time this is false.
   const [micGranted, setMicGranted] = useState(false);
+  // Mic (default) vs Tap — see components/tap-recorder.tsx. Selecting "tap"
+  // (either from the setup screen's own toggle or MicPermissionGate's
+  // escape hatch) lets the gating condition below skip the mic-permission
+  // gate entirely, since Tap mode never touches the microphone.
+  const [inputMode, setInputMode] = useState<InputSource>("microphone");
   const [setupBars, setSetupBars] = useState(1);
   const [setupSubdivision, setSetupSubdivision] = useState<Subdivision>("quarter");
   // Which triplet note (2nd or 3rd) to evaluate — only meaningful when
@@ -438,7 +445,7 @@ export default function Home() {
           paddingBottom: insets.bottom + 24,
         }}
       >
-        {micGranted ? (
+        {inputMode === "tap" || micGranted ? (
           <SessionSetup
             bars={setupBars}
             onBarsChange={setSetupBars}
@@ -446,9 +453,14 @@ export default function Home() {
             onSubdivisionChange={setSetupSubdivision}
             onStart={handleSetupStart}
             onChallenges={() => setShowChallenges(true)}
+            inputMode={inputMode}
+            onInputModeChange={setInputMode}
           />
         ) : (
-          <MicPermissionGate onGranted={() => setMicGranted(true)} />
+          <MicPermissionGate
+            onGranted={() => setMicGranted(true)}
+            onUseTapInstead={() => setInputMode("tap")}
+          />
         )}
       </LinearGradient>
     );
@@ -558,20 +570,37 @@ export default function Home() {
           </DarkPanel>
         )}
 
-        <SyncRecorder
-          isArmed={phase !== "idle"}
-          countInBeats={COUNT_IN_BEATS}
-          bpm={bpm}
-          subdivision={setupSubdivision}
-          tripletTarget={tripletTarget}
-          sixteenthTarget={sixteenthTarget}
-          toleranceMs={toleranceMs}
-          maxBars={setupBars}
-          onSessionEnd={handleSessionEnd}
-          onStatusChange={handleStatusChange}
-          onRecordingStart={handleRecordingStart}
-          onLimitReached={handleLimitReached}
-        />
+        {inputMode === "tap" ? (
+          <TapRecorder
+            isArmed={phase !== "idle"}
+            countInBeats={COUNT_IN_BEATS}
+            bpm={bpm}
+            subdivision={setupSubdivision}
+            tripletTarget={tripletTarget}
+            sixteenthTarget={sixteenthTarget}
+            toleranceMs={toleranceMs}
+            maxBars={setupBars}
+            onSessionEnd={handleSessionEnd}
+            onStatusChange={handleStatusChange}
+            onRecordingStart={handleRecordingStart}
+            onLimitReached={handleLimitReached}
+          />
+        ) : (
+          <SyncRecorder
+            isArmed={phase !== "idle"}
+            countInBeats={COUNT_IN_BEATS}
+            bpm={bpm}
+            subdivision={setupSubdivision}
+            tripletTarget={tripletTarget}
+            sixteenthTarget={sixteenthTarget}
+            toleranceMs={toleranceMs}
+            maxBars={setupBars}
+            onSessionEnd={handleSessionEnd}
+            onStatusChange={handleStatusChange}
+            onRecordingStart={handleRecordingStart}
+            onLimitReached={handleLimitReached}
+          />
+        )}
 
         <View className="items-center">
           <Text className="text-7xl font-bold text-white">{bpm}</Text>

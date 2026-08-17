@@ -14,10 +14,14 @@ import {
   analyzeSession,
   BEATS_PER_BAR,
   currentWindowHalfMs,
+  evaluatedSubBeats,
+  type ExpectedHit,
   type HitDiagnostic,
+  matchTapsToExpectedHits,
   type OnsetEvent,
   type SessionSummary,
   type SixteenthTarget,
+  SUBDIVISION_STEPS,
   type Subdivision,
   type TripletTarget,
   WAVEFORM_SAMPLE_INTERVAL_MS,
@@ -451,6 +455,167 @@ export function scoreChallenge(
     });
 
     previousBarBuckets = thisBarBuckets;
+  }
+
+  const orderedHits = hits.filter(
+    (h): h is ChallengeHitResult => h !== undefined,
+  );
+  return {
+    passed: orderedHits.every((h) => h.onTime),
+    hits: orderedHits,
+    debugGroups,
+  };
+}
+
+// Tap-mode counterpart to scoreChallenge — same public shape (ChallengeResult,
+// one ChallengeDebugGroup per bar so ChallengeReport's DebugChart reuse
+// keeps working unchanged), but matching a flat list of tap timestamps
+// against the challenge's full expected-hit grid instead of re-analyzing a
+// recorded waveform bar by bar.
+//
+// This can run as a *single* matchTapsToExpectedHits pass over the whole
+// challenge, unlike scoreChallenge's incremental per-bar/per-group
+// analyzeSession calls with bucket-exclusion bookkeeping (previousBarBuckets,
+// maxSearchTimeMs) — all of that exists there specifically to stop two
+// waveform searches from claiming the same physical audio peak, which has
+// no equivalent problem here: every tap is already an unambiguous, precise
+// timestamp, so one global "nearest unclaimed tap, in expected-hit order"
+// pass (see matchTapsToExpectedHits) is both correct and simpler. Results
+// are grouped into per-bar debugGroups afterward purely for the report UI.
+export function scoreChallengeFromTaps(
+  challenge: Challenge,
+  tapTimesMs: number[],
+  bpm: number,
+): ChallengeResult {
+  const beatIntervalMs = 60000 / bpm;
+  const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
+  const totalBars = challengeBars(challenge);
+  // Same reasoning as analyzeSession's own matchRadius: every subdivision
+  // evaluates exactly one sub-beat per quarter, so the search never needs
+  // to reach past half a beat interval either side of it.
+  const matchRadius = beatIntervalMs / 2;
+
+  // One expected-hit entry per evaluated sub-beat, built per-quarter from
+  // that quarter's own segment (unlike computeExpectedHits, which assumes
+  // a single subdivision for the whole call) — this is what lets a mixed-
+  // segment bar (Expert 2) work for tap mode too. quarterIndex/segment ride
+  // along purely so the flat match pass below can be regrouped by bar
+  // afterward; matchTapsToExpectedHits itself only reads beatIndex/
+  // subBeatIndex/time.
+  const expectedHits: (ExpectedHit & {
+    quarterIndex: number;
+    segment: ChallengeSegment;
+  })[] = [];
+  challenge.quarterSegments.forEach((segment, quarterIndex) => {
+    const beatTime = quarterIndex * beatIntervalMs;
+    const steps = SUBDIVISION_STEPS[segment.subdivision];
+    const subIntervalMs = beatIntervalMs / steps;
+    for (const sub of evaluatedSubBeats(
+      segment.subdivision,
+      segment.tripletTarget,
+      segment.sixteenthTarget,
+    )) {
+      expectedHits.push({
+        beatIndex: quarterIndex % BEATS_PER_BAR,
+        subBeatIndex: sub,
+        time: beatTime + sub * subIntervalMs,
+        quarterIndex,
+        segment,
+      });
+    }
+  });
+
+  // hitDiagnostics[i] always corresponds to expectedHits[i] — one-to-one,
+  // in order (see matchTapsToExpectedHits) — so events for the per-bar
+  // debug summaries are rebuilt directly from the matched diagnostics
+  // below instead of also consuming the function's own `events` return,
+  // which would need the same positional bookkeeping to regroup by bar
+  // anyway.
+  const { hitDiagnostics } = matchTapsToExpectedHits(
+    expectedHits,
+    tapTimesMs,
+    challenge.toleranceMs,
+    matchRadius,
+  );
+
+  const hits: (ChallengeHitResult | undefined)[] = new Array(
+    challenge.quarterSegments.length,
+  );
+  const barEvents: OnsetEvent[][] = Array.from({ length: totalBars }, () => []);
+  const barHitDiagnostics: HitDiagnostic[][] = Array.from({ length: totalBars }, () => []);
+  const barLabels: string[][] = Array.from({ length: totalBars }, () => []);
+  const barGrid: (ChallengeSegment | null)[] = new Array(totalBars).fill(null);
+  let eventId = 0;
+
+  hitDiagnostics.forEach((diag, i) => {
+    const { quarterIndex, segment } = expectedHits[i];
+    const barIndex = Math.floor(quarterIndex / BEATS_PER_BAR);
+    // Rebased to this bar's own local 0..barDurationMs range — matches
+    // scoreChallenge's own per-bar SessionSummary, and is what lets
+    // DebugChart's "is this event inside this row's [barStart, barEnd)"
+    // check place it correctly. deltaMs itself needs no rebasing: it's
+    // already a relative offset from the expected time, unaffected by
+    // shifting both the target and the real tap time by the same amount.
+    const barRelativeExpectedTimeMs = diag.expectedTimeMs - barIndex * barDurationMs;
+
+    barHitDiagnostics[barIndex].push({
+      ...diag,
+      expectedTimeMs: barRelativeExpectedTimeMs,
+    });
+    if (diag.matched) {
+      barEvents[barIndex].push({
+        id: eventId++,
+        elapsedMs: barRelativeExpectedTimeMs,
+        deltaMs: diag.deltaMs!,
+        status: diag.status!,
+        beatIndex: diag.beatIndex,
+        subBeatIndex: diag.subBeatIndex,
+        amplitude: 1,
+      });
+    }
+
+    hits[quarterIndex] = toHitResult(
+      `${segment.label} ${(quarterIndex % BEATS_PER_BAR) + 1}`,
+      diag,
+    );
+
+    if (!barLabels[barIndex].includes(segment.label)) {
+      barLabels[barIndex].push(segment.label);
+    }
+    // Same "prefer a group with its own real grid" preference as
+    // scoreChallenge's gridSegment above.
+    if (
+      barGrid[barIndex] === null ||
+      segment.subdivision === "triplet" ||
+      segment.subdivision === "sixteenth"
+    ) {
+      barGrid[barIndex] = segment;
+    }
+  });
+
+  const debugGroups: ChallengeDebugGroup[] = [];
+  for (let barIndex = 0; barIndex < totalBars; barIndex++) {
+    const grid = barGrid[barIndex]!;
+    debugGroups.push({
+      label: barLabels[barIndex].join(" / "),
+      barIndex,
+      summary: {
+        events: barEvents[barIndex],
+        rejectedPeaks: [],
+        hitDiagnostics: barHitDiagnostics[barIndex],
+        durationMs: barDurationMs,
+        toleranceMs: challenge.toleranceMs,
+        bpm,
+        subdivision: grid.subdivision,
+        tripletTarget: grid.tripletTarget,
+        sixteenthTarget: grid.sixteenthTarget,
+        waveform: [],
+        maxBars: 1,
+        leadInMs: 0,
+        inputSource: "tap",
+        tapTimesMs,
+      },
+    });
   }
 
   const orderedHits = hits.filter(

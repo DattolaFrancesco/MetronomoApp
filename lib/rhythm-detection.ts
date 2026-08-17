@@ -31,6 +31,16 @@ export type SixteenthTarget = 2 | 3 | 4;
 
 export type OnsetStatus = "onTime" | "early" | "late";
 
+// Where a session's hit timestamps actually came from — "microphone" (the
+// default; also the implicit value for any older SessionSummary that
+// predates this field) means events/hitDiagnostics came from analyzeSession
+// over a real recorded waveform. "tap" means they came from
+// analyzeTapSession instead: the user pressed an on-screen button rather
+// than the mic detecting a sound, so there's no waveform to show (see
+// SessionSummary.waveform/tapTimesMs) and every reported timestamp is exact
+// — a tap has no amplitude/threshold ambiguity to begin with.
+export type InputSource = "microphone" | "tap";
+
 export type OnsetEvent = {
   id: number;
   elapsedMs: number;
@@ -137,6 +147,17 @@ export type SessionSummary = {
   // used by the debug chart to know how far back real pre-roll data
   // extends before the first bar.
   leadInMs: number;
+  // Optional so every existing microphone-mode caller (which never
+  // constructed this field) keeps compiling unchanged — treat a missing
+  // value as "microphone", same as an explicit one, everywhere this is read.
+  inputSource?: InputSource;
+  // Raw tap timestamps (elapsedMs, same origin as OnsetEvent.elapsedMs),
+  // only ever populated when inputSource is "tap" — debug-chart doesn't
+  // need this directly (it reads events/hitDiagnostics like any other
+  // session), kept here mainly so a caller re-analyzing a tap session later
+  // has the original input available. Optional for the same reason as
+  // inputSource above; absent/undefined for every microphone-mode session.
+  tapTimesMs?: number[];
 };
 
 // ---- Constants ----
@@ -661,4 +682,127 @@ export function analyzeSession(
   }
 
   return { events, rejectedPeaks, hitDiagnostics };
+}
+
+// ---- Tap-input session analysis ----
+
+// Same matching *result* shape as analyzeSession (events/hitDiagnostics),
+// but for a discrete list of tap timestamps instead of a continuous
+// waveform — there's no amplitude/attack-shape question to answer (a tap
+// is unambiguous), so this is just "which unclaimed tap sits closest to
+// this expected time, within matchRadiusMs" instead of analyzeSession's
+// loudest-genuine-peak search. Order of `expectedHits` matters exactly the
+// way analyzeSession's does: earlier hits get first claim on a tap two
+// targets are both within range of.
+export function matchTapsToExpectedHits(
+  expectedHits: ExpectedHit[],
+  tapTimesMs: number[],
+  toleranceMs: number,
+  matchRadiusMs: number,
+): {
+  events: OnsetEvent[];
+  hitDiagnostics: HitDiagnostic[];
+} {
+  const events: OnsetEvent[] = [];
+  const hitDiagnostics: HitDiagnostic[] = [];
+  const claimedTaps = new Set<number>();
+  let eventId = 0;
+
+  for (const hit of expectedHits) {
+    const targetTime = hit.time;
+
+    let bestIndex = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < tapTimesMs.length; i++) {
+      if (claimedTaps.has(i)) continue;
+      const dist = Math.abs(tapTimesMs[i] - targetTime);
+      if (dist <= matchRadiusMs && dist < bestDist) {
+        bestDist = dist;
+        bestIndex = i;
+      }
+    }
+
+    let deltaMs: number | null = null;
+    let status: OnsetStatus | null = null;
+    if (bestIndex !== -1) {
+      claimedTaps.add(bestIndex);
+      deltaMs = tapTimesMs[bestIndex] - targetTime;
+      status = classifyOnset(deltaMs, toleranceMs);
+      events.push({
+        id: eventId++,
+        elapsedMs: targetTime,
+        deltaMs,
+        status,
+        beatIndex: hit.beatIndex,
+        subBeatIndex: hit.subBeatIndex,
+        // Taps have no amplitude — 1 (the top of the 0-1 scale everything
+        // else here uses) so anything that treats "louder is more real"
+        // never discounts a tap.
+        amplitude: 1,
+      });
+    }
+
+    hitDiagnostics.push({
+      beatIndex: hit.beatIndex,
+      subBeatIndex: hit.subBeatIndex,
+      expectedTimeMs: targetTime,
+      matched: bestIndex !== -1,
+      // No waveform, so no bucket concept — always null for taps.
+      bucket: null,
+      deltaMs,
+      status,
+      // No amplitude/rise concept for a tap either — it either matched or
+      // it didn't, so these two just mirror `matched` instead of a real
+      // measured level.
+      candidateAmplitude: bestIndex !== -1 ? 1 : null,
+      candidateRise: bestIndex !== -1 ? 1 : null,
+      passedAmplitude: bestIndex !== -1,
+      passedRise: bestIndex !== -1,
+    });
+  }
+
+  return { events, hitDiagnostics };
+}
+
+// analyzeSession's tap-mode counterpart: same overall shape/behavior (one
+// call per session, totalQuarters derived from maxBars the same way), but
+// matching a flat list of tap timestamps against the expected grid instead
+// of searching a recorded waveform for peaks — see matchTapsToExpectedHits.
+// No leadInMs/excludedBuckets/maxSearchTimeMs parameters: those all exist
+// on analyzeSession specifically to manage a *shared, continuous waveform*
+// (pre-roll margin, bucket-claiming across separate calls) that simply
+// doesn't apply here — every tap is its own precise, unambiguous timestamp.
+export function analyzeTapSession(
+  tapTimesMs: number[],
+  durationMs: number,
+  bpm: number,
+  subdivision: Subdivision,
+  tripletTarget: TripletTarget,
+  sixteenthTarget: SixteenthTarget,
+  toleranceMs: number,
+  maxBars: number | undefined,
+): {
+  events: OnsetEvent[];
+  hitDiagnostics: HitDiagnostic[];
+} {
+  const beatIntervalMs = 60000 / bpm;
+  if (!Number.isFinite(beatIntervalMs) || beatIntervalMs <= 0) {
+    return { events: [], hitDiagnostics: [] };
+  }
+
+  const matchRadius = beatIntervalMs / 2;
+  const totalQuarters =
+    maxBars != null
+      ? maxBars * BEATS_PER_BAR
+      : Math.ceil(durationMs / beatIntervalMs) + 1;
+
+  const expectedHits = computeExpectedHits(
+    bpm,
+    subdivision,
+    tripletTarget,
+    sixteenthTarget,
+    totalQuarters,
+  ).filter((hit) => hit.time <= durationMs + beatIntervalMs);
+
+  return matchTapsToExpectedHits(expectedHits, tapTimesMs, toleranceMs, matchRadius);
 }

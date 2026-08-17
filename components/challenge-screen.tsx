@@ -3,6 +3,7 @@ import DarkPanel from "@/components/dark-panel";
 import DebugChart from "@/components/debug-chart";
 import { GlowDivider } from "@/components/session-setup";
 import SyncRecorder, { type SessionSummary } from "@/components/sync-recorder";
+import TapRecorder from "@/components/tap-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
 import TimingMasterScreen from "@/components/timing-master-screen";
 import {
@@ -15,11 +16,13 @@ import {
   challengeBars,
   CHALLENGES,
   scoreChallenge,
+  scoreChallengeFromTaps,
   type Challenge,
   type ChallengeDifficulty,
   type ChallengeId,
   type ChallengeResult,
 } from "@/lib/challenges";
+import type { InputSource } from "@/lib/rhythm-detection";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -254,6 +257,13 @@ function ChallengeSession({
   // to show TimingMasterScreen instead of leaving straight back to the list.
   const [masteryPending, setMasteryPending] = useState(false);
   const [showMastery, setShowMastery] = useState(false);
+  // Mic (default) vs Tap — fully independent of app/index.tsx's own
+  // inputMode (see this file's own header comment on why Challenge never
+  // shares state with the free-session flow). No permission gate needed
+  // here at all: ChallengeSession is only ever reached once Home has
+  // already granted mic access, and Tap mode never needs it in the first
+  // place.
+  const [inputMode, setInputMode] = useState<InputSource>("microphone");
 
   const phaseRef = useRef<Phase>("idle");
   // Guards handleStart/handleStop against a double-tap firing both before
@@ -339,17 +349,20 @@ function ChallengeSession({
     setCountInBeat(null);
   };
 
-  // The 8-hit pass/fail verdict comes entirely from re-analyzing the raw
-  // waveform SyncRecorder just recorded — see scoreChallenge. The fixed
-  // subdivision="quarter" below is only ever used for SyncRecorder's own
-  // (here unused) live approximate status flash, never for this result.
+  // The 8-hit pass/fail verdict comes entirely from re-analyzing either the
+  // raw waveform SyncRecorder just recorded (scoreChallenge) or the raw tap
+  // timestamps TapRecorder just recorded (scoreChallengeFromTaps) — which
+  // one ran is read straight off the summary itself (inputSource), not off
+  // this component's own inputMode state, so this stays correct even if a
+  // report is ever re-derived from an already-finished summary later. The
+  // fixed subdivision="quarter" passed to both recorders below is only ever
+  // used for their own (here unused) live approximate status flash, never
+  // for this result.
   const handleSessionEnd = async (summary: SessionSummary) => {
-    const scored = scoreChallenge(
-      challenge,
-      summary.waveform,
-      summary.bpm,
-      summary.leadInMs,
-    );
+    const scored =
+      summary.inputSource === "tap"
+        ? scoreChallengeFromTaps(challenge, summary.tapTimesMs ?? [], summary.bpm)
+        : scoreChallenge(challenge, summary.waveform, summary.bpm, summary.leadInMs);
     setResult(scored);
     if (scored.passed) {
       await markChallengeCompleted(challenge.id);
@@ -450,17 +463,75 @@ function ChallengeSession({
 
         {phase !== "idle" && <BeatIndicator isActive />}
 
-        <SyncRecorder
-          isArmed={phase !== "idle"}
-          countInBeats={COUNT_IN_BEATS}
-          bpm={bpm}
-          subdivision="quarter"
-          toleranceMs={challenge.toleranceMs}
-          maxBars={challengeBars(challenge)}
-          onSessionEnd={handleSessionEnd}
-          onRecordingStart={handleRecordingStart}
-          onLimitReached={handleLimitReached}
-        />
+        {/* Same as the free-session setup screen's Mic/Tap toggle — only
+            changeable before Start, same lock-in reasoning as bpm/tolerance
+            elsewhere on this screen. */}
+        {phase === "idle" && (
+          <View className="flex-row gap-2">
+            <Pressable
+              onPress={() => setInputMode("microphone")}
+              className="flex-1 py-2 rounded-xl items-center active:opacity-60"
+              style={{
+                borderWidth: 2,
+                borderColor:
+                  inputMode === "microphone" ? ACCENT_COLOR : "rgba(255,255,255,0.15)",
+                backgroundColor:
+                  inputMode === "microphone" ? "rgba(255,59,48,0.12)" : "transparent",
+              }}
+            >
+              <Text
+                className="text-[11px] font-bold uppercase tracking-widest"
+                style={{
+                  color: inputMode === "microphone" ? ACCENT_COLOR : "#8E8E93",
+                }}
+              >
+                Microphone
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setInputMode("tap")}
+              className="flex-1 py-2 rounded-xl items-center active:opacity-60"
+              style={{
+                borderWidth: 2,
+                borderColor: inputMode === "tap" ? ACCENT_COLOR : "rgba(255,255,255,0.15)",
+                backgroundColor: inputMode === "tap" ? "rgba(255,59,48,0.12)" : "transparent",
+              }}
+            >
+              <Text
+                className="text-[11px] font-bold uppercase tracking-widest"
+                style={{ color: inputMode === "tap" ? ACCENT_COLOR : "#8E8E93" }}
+              >
+                Tap
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        {inputMode === "tap" ? (
+          <TapRecorder
+            isArmed={phase !== "idle"}
+            countInBeats={COUNT_IN_BEATS}
+            bpm={bpm}
+            subdivision="quarter"
+            toleranceMs={challenge.toleranceMs}
+            maxBars={challengeBars(challenge)}
+            onSessionEnd={handleSessionEnd}
+            onRecordingStart={handleRecordingStart}
+            onLimitReached={handleLimitReached}
+          />
+        ) : (
+          <SyncRecorder
+            isArmed={phase !== "idle"}
+            countInBeats={COUNT_IN_BEATS}
+            bpm={bpm}
+            subdivision="quarter"
+            toleranceMs={challenge.toleranceMs}
+            maxBars={challengeBars(challenge)}
+            onSessionEnd={handleSessionEnd}
+            onRecordingStart={handleRecordingStart}
+            onLimitReached={handleLimitReached}
+          />
+        )}
 
         <View className="items-center">
           <Text className="text-7xl font-bold text-white">{bpm}</Text>

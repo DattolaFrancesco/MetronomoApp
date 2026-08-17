@@ -3,6 +3,7 @@ import {
   CHALLENGES,
   challengeBars,
   scoreChallenge,
+  scoreChallengeFromTaps,
   type Challenge,
   type ChallengeSegment,
 } from "./challenges";
@@ -292,5 +293,89 @@ describe("scoreChallenge — alternanza-battuta (Expert 2, mixed subdivision wit
     expect(result.hits[2].onTime).toBe(false); // Quarter 3
     expect(result.hits[3].onTime).toBe(true); // Sixteenth-2 4
     expect(result.passed).toBe(false);
+  });
+});
+
+describe("scoreChallengeFromTaps — tap-mode scoring", () => {
+  test("battere-poi-levare: taps exactly on the expected grid pass, same hit labels as the mic path", () => {
+    const challenge = getChallenge("battere-poi-levare");
+    const targets = allTargetsMs(challenge);
+
+    const result = scoreChallengeFromTaps(challenge, targets, BPM);
+
+    expect(result.hits).toHaveLength(8);
+    expect(result.hits.every((h) => h.onTime)).toBe(true);
+    expect(result.passed).toBe(true);
+    // Same label scheme scoreChallenge already produces for this challenge.
+    expect(result.hits.map((h) => h.label)).toEqual([
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
+      "Upbeat 1", "Upbeat 2", "Upbeat 3", "Upbeat 4",
+    ]);
+  });
+
+  test("a missing tap fails that hit but leaves the others matched", () => {
+    const challenge = getChallenge("battere-poi-levare");
+    const targets = allTargetsMs(challenge);
+    const missingOne = targets.filter((_, i) => i !== 2); // drop Quarter 3
+
+    const result = scoreChallengeFromTaps(challenge, missingOne, BPM);
+
+    expect(result.hits[2].onTime).toBe(false);
+    expect(result.hits[2].deltaMs).toBeNull();
+    expect(result.hits.filter((h) => h.onTime)).toHaveLength(7);
+    expect(result.passed).toBe(false);
+  });
+
+  test("a tap outside the tolerance (but still inside matchRadius) fails that hit", () => {
+    const challenge = getChallenge("battere-poi-levare"); // toleranceMs 100
+    const targets = allTargetsMs(challenge);
+    const shifted = targets.map((t, i) => (i === 0 ? t + 150 : t));
+
+    const result = scoreChallengeFromTaps(challenge, shifted, BPM);
+
+    expect(result.hits[0].onTime).toBe(false);
+    expect(result.hits[0].deltaMs).toBeCloseTo(150, 0);
+    expect(result.passed).toBe(false);
+  });
+
+  test("alternanza-battuta (mixed subdivision within one bar) works for taps exactly like scoreChallenge", () => {
+    const challenge = getChallenge("alternanza-battuta");
+    const targets = allTargetsMs(challenge);
+    expect(targets).toEqual([0, 625, 1000, 1625]);
+
+    const result = scoreChallengeFromTaps(challenge, targets, BPM);
+
+    expect(result.hits.map((h) => h.label)).toEqual([
+      "Quarter 1", "Sixteenth-2 2", "Quarter 3", "Sixteenth-2 4",
+    ]);
+    expect(result.hits.every((h) => h.onTime)).toBe(true);
+    expect(result.passed).toBe(true);
+  });
+
+  test("debugGroups: one per bar, tap-tagged, bar-relative elapsedMs, and no waveform", () => {
+    const challenge = getChallenge("levare-poi-battere"); // 2 bars
+    const targets = allTargetsMs(challenge);
+
+    const result = scoreChallengeFromTaps(challenge, targets, BPM);
+
+    expect(result.debugGroups).toHaveLength(challengeBars(challenge));
+    result.debugGroups.forEach((group) => {
+      expect(group.summary.inputSource).toBe("tap");
+      expect(group.summary.waveform).toEqual([]);
+      expect(group.summary.tapTimesMs).toEqual(targets);
+      // Every event in this bar's summary must fall inside this bar's own
+      // local [0, barDurationMs) range — proves elapsedMs was rebased per
+      // bar instead of staying absolute across the whole challenge.
+      const barDurationMs = (60000 / BPM) * 4;
+      for (const event of group.summary.events) {
+        expect(event.elapsedMs).toBeGreaterThanOrEqual(0);
+        expect(event.elapsedMs).toBeLessThan(barDurationMs);
+      }
+    });
+    // Bar 2's own hits should still all be onTime even though their
+    // absolute time is well past bar 1's range.
+    const bar2Events = result.debugGroups[1].summary.events;
+    expect(bar2Events.length).toBeGreaterThan(0);
+    expect(bar2Events.every((e) => e.status === "onTime")).toBe(true);
   });
 });

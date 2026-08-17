@@ -1,5 +1,6 @@
 import NoteGlyph from "@/components/note-glyph";
 import type { Subdivision } from "@/components/sync-recorder";
+import type { InputSource } from "@/lib/rhythm-detection";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -189,6 +190,14 @@ type SessionSetupProps = {
   onSubdivisionChange: (subdivision: Subdivision) => void;
   onStart: () => void;
   onChallenges: () => void;
+  // Mic (default) vs Tap — see components/tap-recorder.tsx. Selectable here
+  // even before microphone access is granted (app/index.tsx's gating
+  // condition lets "tap" through regardless); switching back to
+  // "microphone" without granted access sends the screen back to
+  // MicPermissionGate, which is the correct behavior since that mode
+  // actually needs it.
+  inputMode: InputSource;
+  onInputModeChange: (mode: InputSource) => void;
 };
 
 export default function SessionSetup({
@@ -198,6 +207,8 @@ export default function SessionSetup({
   onSubdivisionChange,
   onStart,
   onChallenges,
+  inputMode,
+  onInputModeChange,
 }: SessionSetupProps) {
   const barsIndex = Math.max(0, BARS_OPTIONS.indexOf(bars as (typeof BARS_OPTIONS)[number]));
   const subdivisionIndex = Math.max(
@@ -248,6 +259,45 @@ export default function SessionSetup({
           >
             <Text className="text-xs font-bold uppercase tracking-widest text-neutral-400">
               Challenge
+            </Text>
+          </Pressable>
+        </View>
+
+        <View className="flex-row gap-2">
+          <Pressable
+            onPress={() => onInputModeChange("microphone")}
+            className="flex-1 py-2 rounded-xl items-center active:opacity-60"
+            style={{
+              borderWidth: 2,
+              borderColor:
+                inputMode === "microphone" ? ACCENT_COLOR : "rgba(255,255,255,0.15)",
+              backgroundColor:
+                inputMode === "microphone" ? "rgba(255,59,48,0.12)" : "transparent",
+            }}
+          >
+            <Text
+              className="text-[11px] font-bold uppercase tracking-widest"
+              style={{
+                color: inputMode === "microphone" ? ACCENT_COLOR : "#8E8E93",
+              }}
+            >
+              Microphone
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => onInputModeChange("tap")}
+            className="flex-1 py-2 rounded-xl items-center active:opacity-60"
+            style={{
+              borderWidth: 2,
+              borderColor: inputMode === "tap" ? ACCENT_COLOR : "rgba(255,255,255,0.15)",
+              backgroundColor: inputMode === "tap" ? "rgba(255,59,48,0.12)" : "transparent",
+            }}
+          >
+            <Text
+              className="text-[11px] font-bold uppercase tracking-widest"
+              style={{ color: inputMode === "tap" ? ACCENT_COLOR : "#8E8E93" }}
+            >
+              Tap
             </Text>
           </Pressable>
         </View>
