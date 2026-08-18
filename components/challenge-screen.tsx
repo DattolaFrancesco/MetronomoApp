@@ -453,16 +453,19 @@ function ChallengeSession({
 
         <GlowDivider />
 
-        {isCountIn && (
-          <View className="items-center justify-center py-2">
-            <Text
-              className="text-8xl font-bold text-white"
-              style={{ lineHeight: 104 }}
-            >
-              {countInBeat ?? ""}
-            </Text>
-          </View>
-        )}
+        {/* Always mounted (not just while isCountIn) so it reserves the
+            same height in every phase — otherwise the space it frees up
+            once the count-in ends would go straight to the flex:1
+            TapRecorder/SyncRecorder area below, visibly growing the tap
+            button right after the count-in finishes. */}
+        <View className="items-center justify-center py-2" style={{ height: 120 }}>
+          <Text
+            className="text-8xl font-bold text-white"
+            style={{ lineHeight: 104 }}
+          >
+            {isCountIn ? (countInBeat ?? "") : ""}
+          </Text>
+        </View>
 
         {phase !== "idle" && <BeatIndicator isActive />}
 
