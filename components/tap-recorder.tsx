@@ -26,6 +26,27 @@ const STATUS_HOLD_MS = 180;
 const ACCENT_COLOR = "#FF3B30";
 const FLASH_DURATION_MS = 260;
 
+// A tap's recorded timestamp is inherently a little later than the finger's
+// actual contact instant — touch-to-JS dispatch plus the device's own audio
+// output latency (wired headphones or the phone speaker only; this app
+// never targets Bluetooth, whose latency varies far too much device to
+// device to cover with one constant). Subtracted from every tap's own
+// timestamp below so a genuinely on-time tap reports ~0ms instead of a
+// small, systematic "late" bias.
+//
+// The audio half of that is read for real off the device (see
+// ExpoPrecisionMetronomeModule.getOutputLatencyMs, backed by
+// AVAudioSession.outputLatency on iOS) instead of guessed — see
+// fetchLatencyCompensation below. TOUCH_LATENCY_ESTIMATE_MS covers the
+// other half (finger-contact to JS event dispatch), which no platform API
+// here reports, so it stays a flat estimate. FALLBACK_LATENCY_COMPENSATION_MS
+// is the whole-thing fallback (tuned by hand against a real device) for
+// platforms/timings where the real reading isn't available yet — Android
+// (not implemented natively — see the module's own comment), web, or a tap
+// that lands before the engine has started reporting a real value.
+const TOUCH_LATENCY_ESTIMATE_MS = 10;
+const FALLBACK_LATENCY_COMPENSATION_MS = 20;
+
 // Created once at module scope (not per-render) — Animated.createAnimatedComponent
 // wraps Pressable so its style can carry live Animated.Value-driven colors/shadow.
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -84,6 +105,19 @@ export default function TapRecorder({
   onRequestStart,
 }: TapRecorderProps) {
   const [tapCount, setTapCount] = useState(0);
+  // The latency-compensation value actually in effect right now — see
+  // FALLBACK_LATENCY_COMPENSATION_MS above and fetchLatencyCompensation
+  // below. Shown in the UI (below) so it's visible per device instead of
+  // only living inside a subtracted constant no one can see.
+  const [latencyCompensationMs, setLatencyCompensationMs] = useState(
+    FALLBACK_LATENCY_COMPENSATION_MS,
+  );
+  // Temporary on-screen diagnostics for the getOutputLatencyMs fetch below
+  // — lets it be debugged straight off the phone (raw return value, or the
+  // exact error if the native call is throwing) without needing a live
+  // Xcode console attached. Remove once latencyCompensationMs is confirmed
+  // reliable across devices.
+  const [latencyDebugInfo, setLatencyDebugInfo] = useState("not fetched yet");
   // Drives the button's flash/glow: snapped to 1 on every press (armed or
   // not, scored or not — always the same red, no accuracy color-coding),
   // then animated back down to 0 — see triggerFlash below. useState (not
@@ -105,6 +139,9 @@ export default function TapRecorder({
   const onRecordingStartRef = useRef(onRecordingStart);
   const onLimitReachedRef = useRef(onLimitReached);
   const onRequestStartRef = useRef(onRequestStart);
+  // Mirrors latencyCompensationMs for the synchronous read inside
+  // handlePress — same reason every other *Ref above exists.
+  const latencyCompensationMsRef = useRef(latencyCompensationMs);
 
   // "Beat 1" timestamp — elapsedMs=0 for every tap timestamp recorded
   // below, same role as SyncRecorder's own sessionStartRef.
@@ -156,6 +193,9 @@ export default function TapRecorder({
   useEffect(() => {
     isArmedRef.current = isArmed;
   }, [isArmed]);
+  useEffect(() => {
+    latencyCompensationMsRef.current = latencyCompensationMs;
+  }, [latencyCompensationMs]);
   useEffect(() => {
     onSessionEndRef.current = onSessionEnd;
   }, [onSessionEnd]);
@@ -264,8 +304,10 @@ export default function TapRecorder({
     }).start();
   }
 
-  // The button's single onPress handler. While not armed yet, a press means
-  // "start" (see onRequestStart above) rather than a scored hit; once armed
+  // The button's single press handler — wired to onPressIn, not onPress,
+  // so it fires on finger-down (see the prop below for why). While not
+  // armed yet, a press means "start" (see onRequestStart above) rather
+  // than a scored hit; once armed
   // (count-in running or recording), it registers a tap — which itself
   // still no-ops (after flashing) until the count-in's last beat has
   // elapsed, i.e. captureArmedRef is true (see maybeArmCapture). Kept as
@@ -278,16 +320,23 @@ export default function TapRecorder({
   // second JS-side audio player — an earlier attempt at the latter fought
   // the metronome's engine over the shared iOS audio session and stopped
   // it dead after a couple of beats. Routed through the same engine, the
-  // tap click just mixes into the same buffer as the beat click. It's a
-  // fire-and-forget call: harmless (silently a no-op) if the engine isn't
-  // running yet, e.g. the very first press, which starts it.
+  // tap click just mixes into the same buffer as the beat click.
   function handlePress() {
     triggerFlash();
-    ExpoPrecisionMetronomeModule.playTapClick();
 
     if (!isArmedRef.current) {
+      // No click here — the engine hasn't started yet, so this press is
+      // purely "start the count-in", not a tap along with anything.
       onRequestStartRef.current?.();
       return;
+    }
+    // Only click once real recording has actually started — during the
+    // count-in (including its last, capture-armed beat, see
+    // captureArmedRef below) a click here would confusingly mix with the
+    // metronome's own count-in clicks. This only silences the *sound*: a
+    // tap on the count-in's last beat is still captured for scoring.
+    if (recordingStartedRef.current) {
+      ExpoPrecisionMetronomeModule.playTapClick();
     }
     // Too early even for the lead-in beat (still mid count-in) — nothing
     // meaningful to record yet.
@@ -295,7 +344,10 @@ export default function TapRecorder({
       return;
     }
 
-    const now = Date.now();
+    // Compensated once, here, at the single point this tap's own contact
+    // instant is captured — every use of `now` below (stored timestamp and
+    // the live classification) inherits the correction automatically.
+    const now = Date.now() - latencyCompensationMsRef.current;
     if (sessionStartRef.current !== null) {
       tapTimesRef.current.push(now - sessionStartRef.current);
     } else {
@@ -341,7 +393,64 @@ export default function TapRecorder({
   useEffect(() => {
     if (!isArmed) return;
 
+    // Re-reads the real per-route output latency every time a session
+    // arms (the route can change between sessions — e.g. headphones
+    // plugged/unplugged) instead of once at mount. The native start(bpm)
+    // call that actually activates AVAudioSession (see MetronomeEngine's
+    // launchEngine) is fired from the same press that armed this (see
+    // onRequestStart/handlePress) but is itself async, so the very first
+    // read here can easily land *before* it's actually active — a 0
+    // result (also what Android/web always return — see the module's own
+    // comments) just means "not ready yet", not "no latency", so this
+    // retries a few times instead of giving up on the first miss and
+    // silently sitting on the fallback constant for the whole session.
+    let cancelled = false;
+    let attempt = 0;
+    const MAX_ATTEMPTS = 6;
+    const RETRY_DELAY_MS = 250;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    function scheduleRetry() {
+      attempt += 1;
+      if (attempt < MAX_ATTEMPTS) {
+        retryTimeout = setTimeout(tryFetch, RETRY_DELAY_MS);
+      }
+    }
+
+    function tryFetch() {
+      ExpoPrecisionMetronomeModule.getOutputLatencyMs()
+        .then((outputLatencyMs) => {
+          if (cancelled) return;
+          if (outputLatencyMs > 0) {
+            setLatencyCompensationMs(
+              outputLatencyMs + TOUCH_LATENCY_ESTIMATE_MS,
+            );
+            setLatencyDebugInfo(`ok: raw=${outputLatencyMs.toFixed(2)}ms`);
+            return;
+          }
+          // 0 (or negative) isn't a real reading — session likely not
+          // active yet, see the comment above. Retry instead of giving up.
+          setLatencyDebugInfo(
+            `attempt ${attempt + 1}/${MAX_ATTEMPTS}: raw=${outputLatencyMs}`,
+          );
+          scheduleRetry();
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          // A rejection is not the same as "not ready yet" — surfaced on
+          // screen (not just swallowed) since this is exactly the kind of
+          // failure a silent .catch would otherwise hide forever.
+          setLatencyDebugInfo(
+            `attempt ${attempt + 1}/${MAX_ATTEMPTS} threw: ${String(err?.message ?? err)}`,
+          );
+          scheduleRetry();
+        });
+    }
+    tryFetch();
+
     return () => {
+      cancelled = true;
+      if (retryTimeout) clearTimeout(retryTimeout);
       if (limitReachedTimeoutRef.current) {
         clearTimeout(limitReachedTimeoutRef.current);
         limitReachedTimeoutRef.current = null;
@@ -411,7 +520,12 @@ export default function TapRecorder({
       </Text>
 
       <AnimatedPressable
-        onPress={handlePress}
+        // onPressIn (finger-down), not onPress (finger-up, i.e. release) —
+        // for a rhythm tap, the moment that matters is contact, and
+        // onPress's own down-to-up gap is both a fixed extra delay and
+        // per-tap jitter (it varies with how long the press is held), on
+        // top of the delay itself.
+        onPressIn={handlePress}
         className="items-center justify-center rounded-2xl active:opacity-80"
         style={{
           flex: 1,
@@ -445,6 +559,13 @@ export default function TapRecorder({
         {isArmed
           ? "Tap the button in time with the metronome."
           : "Tap the button to start — no microphone needed."}
+      </Text>
+
+      {/* Debug/QA visibility for latencyCompensationMs — see its own
+          comment above. Not a setting, just makes an otherwise invisible
+          per-device value inspectable. */}
+      <Text className="text-neutral-700 text-[10px]">
+        Latency comp: {Math.round(latencyCompensationMs)}ms ({latencyDebugInfo})
       </Text>
     </DarkPanel>
   );
