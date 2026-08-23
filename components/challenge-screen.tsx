@@ -22,7 +22,13 @@ import {
   type ChallengeId,
   type ChallengeResult,
 } from "@/lib/challenges";
+import {
+  getHasSeenChallengeTour,
+  markChallengeTourSeen,
+} from "@/lib/onboarding";
 import type { InputSource } from "@/lib/rhythm-detection";
+import { tourTheme } from "@/lib/tour-theme";
+import { TourTarget, useTourGuide, type TourStep } from "@wrack/react-native-tour-guide";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -35,6 +41,37 @@ import ExpoPrecisionMetronomeModule, {
 import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+// Tour 2 — see lib/onboarding.ts's getHasSeenChallengeTour. A single
+// startTour() call (unlike Tour 1, every one of these targets lives on the
+// same screen already), fired once from ChallengeList's own mount effect.
+const CHALLENGE_TOUR_STEPS: TourStep[] = [
+  {
+    id: "challenge-list",
+    targetId: "challenge-list",
+    title: "Challenges",
+    description: "Ordered easiest to hardest, top to bottom.",
+    delayBefore: 300,
+  },
+  {
+    id: "challenge-difficulty-badge",
+    targetId: "challenge-difficulty-badge",
+    title: "Difficulty",
+    description: "Easy, Medium, Hard, Expert — harder tiers ask for more (or trickier) subdivisions and a tighter timing tolerance.",
+  },
+  {
+    id: "challenge-card-first",
+    targetId: "challenge-card-first",
+    title: "A challenge",
+    description: "Tap any card to see its details and start it.",
+  },
+  {
+    id: "challenge-tolerance",
+    targetId: "challenge-tolerance",
+    title: "Tolerance",
+    description: "How close to the beat every hit needs to land to pass — tighter on harder challenges.",
+  },
+];
 
 // Self-contained sibling to the free-session flow in app/index.tsx — its
 // own local list/session/report state machine, mounted/unmounted as a
@@ -143,6 +180,72 @@ export default function ChallengeScreen({ onBack, inputMode }: ChallengeScreenPr
 
 // Scrollable list, ordered easiest to hardest (see CHALLENGES) — only one
 // real entry today, but laid out to hold more without changes.
+// One challenge's list card — split out from ChallengeList's own map so the
+// Tour 2 spotlight wrapping (only ever the *first* card, difficulty badge,
+// and tolerance line — see MAIN steps 2-4 in components/challenge-screen.tsx's
+// own tour trigger below) doesn't force every other, unwrapped card through
+// the same conditional branching inline.
+function ChallengeCard({
+  challenge,
+  completed,
+  onSelect,
+  isFirst,
+}: {
+  challenge: Challenge;
+  completed: boolean;
+  onSelect: () => void;
+  isFirst: boolean;
+}) {
+  const card = (
+    <Pressable onPress={onSelect} className="active:opacity-70">
+      <DarkPanel className="px-4 py-4 gap-2">
+        <View className="flex-row items-center justify-between">
+          <View className="flex-row items-center gap-2 flex-1 pr-2">
+            {completed && <Text style={{ color: SUCCESS_COLOR }}>✓</Text>}
+            <Text className="text-white text-base font-bold flex-shrink">
+              {challenge.name}
+            </Text>
+          </View>
+          {isFirst ? (
+            <TourTarget id="challenge-difficulty-badge" style={{ borderRadius: 999 }}>
+              <DifficultyBadge difficulty={challenge.difficulty} />
+            </TourTarget>
+          ) : (
+            <DifficultyBadge difficulty={challenge.difficulty} />
+          )}
+        </View>
+        <Text className="text-neutral-500 text-xs leading-4">
+          {challenge.description}
+        </Text>
+        {isFirst ? (
+          <TourTarget id="challenge-tolerance">
+            <Text
+              className="text-[10px] font-bold uppercase tracking-wider"
+              style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
+            >
+              ±{challenge.toleranceMs}ms tolerance
+            </Text>
+          </TourTarget>
+        ) : (
+          <Text
+            className="text-[10px] font-bold uppercase tracking-wider"
+            style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
+          >
+            ±{challenge.toleranceMs}ms tolerance
+          </Text>
+        )}
+      </DarkPanel>
+    </Pressable>
+  );
+
+  if (!isFirst) return card;
+  return (
+    <TourTarget id="challenge-card-first" style={{ borderRadius: 16 }}>
+      {card}
+    </TourTarget>
+  );
+}
+
 function ChallengeList({
   completedIds,
   onSelect,
@@ -156,6 +259,33 @@ function ChallengeList({
 }) {
   const insets = useSafeAreaInsets();
   const allComplete = CHALLENGES.every((c) => completedIds.has(c.id));
+
+  const { startTour } = useTourGuide();
+
+  // Fires once, the very first time this list is shown — independent of
+  // Tour 1's own persistence (see lib/onboarding.ts), so it's the actual
+  // first Challenge-section visit that matters, not whether Tour 1 has
+  // run. Also how the settings menu's "Replay Challenge tutorial" shows it
+  // again — it just resets this same flag and navigates here (see
+  // app/index.tsx's replayChallengeTour).
+  useEffect(() => {
+    let cancelled = false;
+    getHasSeenChallengeTour().then((seen) => {
+      if (cancelled || seen) return;
+      startTour(CHALLENGE_TOUR_STEPS, {
+        ...tourTheme,
+        tourId: "challengeTour",
+        showProgressDots: true,
+        onTourEnd: () => {
+          markChallengeTourSeen();
+        },
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <LinearGradient
@@ -219,40 +349,19 @@ function ChallengeList({
 
         <View style={{ height: 1, backgroundColor: "rgba(255,255,255,0.12)" }} />
 
-        {CHALLENGES.map((challenge) => (
-          <Pressable
-            key={challenge.id}
-            onPress={() => onSelect(challenge)}
-            className="active:opacity-70"
-          >
-            <DarkPanel className="px-4 py-4 gap-2">
-              <View className="flex-row items-center justify-between">
-                <View className="flex-row items-center gap-2 flex-1 pr-2">
-                  {completedIds.has(challenge.id) && (
-                    <Text style={{ color: SUCCESS_COLOR }}>✓</Text>
-                  )}
-                  <Text className="text-white text-base font-bold flex-shrink">
-                    {challenge.name}
-                  </Text>
-                </View>
-                <DifficultyBadge difficulty={challenge.difficulty} />
-              </View>
-              <Text className="text-neutral-500 text-xs leading-4">
-                {challenge.description}
-              </Text>
-              {/* Tolerance tightens with difficulty (see CHALLENGES in
-                  lib/challenges.ts) — surfaced here so it's visible before
-                  committing to a challenge, not just discoverable by
-                  failing one and wondering why. */}
-              <Text
-                className="text-[10px] font-bold uppercase tracking-wider"
-                style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
-              >
-                ±{challenge.toleranceMs}ms tolerance
-              </Text>
-            </DarkPanel>
-          </Pressable>
-        ))}
+        <TourTarget id="challenge-list">
+          <View style={{ gap: 16 }}>
+            {CHALLENGES.map((challenge, index) => (
+              <ChallengeCard
+                key={challenge.id}
+                challenge={challenge}
+                completed={completedIds.has(challenge.id)}
+                onSelect={() => onSelect(challenge)}
+                isFirst={index === 0}
+              />
+            ))}
+          </View>
+        </TourTarget>
       </ScrollView>
     </LinearGradient>
   );

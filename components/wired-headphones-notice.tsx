@@ -13,14 +13,14 @@ type Props = {
   onDone: () => void;
 };
 
-// Shown before anything else in the app (even the tutorial) — checks
-// AsyncStorage on mount and, if the user previously checked "Don't show
-// this again", calls onDone immediately without ever rendering (same
-// self-gating idiom as TutorialScreen/MicPermissionGate). Unlike the
-// tutorial, dismissing this via "Got it" alone does *not* persist anything
-// — it's meant to reappear on every launch until the user opts out via the
-// checkbox, since Bluetooth latency is a per-session, easy-to-forget risk
-// to the app's core measurement, not a one-time thing to learn.
+// Shown before anything else in the app — checks AsyncStorage on mount
+// and, if the user previously checked "Don't show this again", calls
+// onDone immediately without ever rendering (same self-gating idiom as
+// MicPermissionGate). Dismissing this via "Got it" alone does *not*
+// persist anything — it's meant to reappear on every launch until the
+// user opts out via the checkbox, since Bluetooth latency is a
+// per-session, easy-to-forget risk to the app's core measurement, not a
+// one-time thing to learn.
 export default function WiredHeadphonesNotice({ onDone }: Props) {
   const [checking, setChecking] = useState(true);
   const [dontShowAgain, setDontShowAgain] = useState(false);
@@ -67,8 +67,8 @@ export default function WiredHeadphonesNotice({ onDone }: Props) {
           This app measures your timing down to the millisecond. Bluetooth
           headphones add audio delay that throws off the measurement — even a
           great pair can be off by 100ms or more. For precise results, use
-          wired headphones or earbuds. This also keeps the mic from picking
-          up the metronome’s own click.
+          wired headphones. This also keeps the mic from picking up the
+          metronome’s own click.
         </Text>
 
         <Pressable

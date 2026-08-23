@@ -13,9 +13,12 @@ import SyncRecorder, {
 } from "@/components/sync-recorder";
 import TapRecorder from "@/components/tap-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
-import TutorialScreen from "@/components/tutorial-screen";
 import WiredHeadphonesNotice from "@/components/wired-headphones-notice";
+import { buildTourPreviewReport } from "@/lib/fake-report";
+import { getHasSeenMainTour, markMainTourSeen } from "@/lib/onboarding";
 import type { InputSource } from "@/lib/rhythm-detection";
+import { tourTheme } from "@/lib/tour-theme";
+import { TourTarget, useTourGuide, type TourStep } from "@wrack/react-native-tour-guide";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -58,6 +61,96 @@ const STATUS_META: Record<OnsetStatus, { label: string; color: string }> = {
   late: { label: "LATE", color: "#FF453A" },
 };
 const IDLE_COLOR = ACCENT_COLOR;
+
+// Two extra animation frames (paint, then layout) after a state change
+// before a step tries to measure its target — used for the two screen
+// transitions below (session preview, report preview), which swap in
+// components startTour() has never seen mounted before. delayBefore alone
+// (a fixed timer) can't guarantee layout has actually committed by then;
+// this waits for the real thing instead of guessing a number, same
+// principle the library's own before() docs recommend.
+function waitForNextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
+// Main spotlight tour — one continuous startTour() call across three
+// screens (setup, a simulated session, a simulated report), all built from
+// real components. The session/report screens shown here are never a real
+// recording: showSessionPreview/showReportPreview (passed in by Home,
+// which owns the state) flip the same screens the app really uses into a
+// display-only state — see isTourSessionPreview and the fake report from
+// lib/fake-report.ts — so nothing here ever touches the microphone, asks
+// for a permission, or plays real audio. Built as a function (not a module
+// constant) because the before() hooks need to close over Home's own state
+// setters.
+function buildMainTourSteps(
+  showSessionPreview: () => Promise<void>,
+  showReportPreview: () => Promise<void>,
+): TourStep[] {
+  return [
+    {
+      id: "setup-bars",
+      targetId: "setup-bars",
+      title: "Bars",
+      description: "How many bars the session lasts — the metronome stops itself once they're done.",
+      delayBefore: 300,
+    },
+    {
+      id: "setup-subdivision",
+      targetId: "setup-subdivision",
+      title: "Subdivision",
+      description: "Which rhythmic subdivision to practice against — quarters, eighths, triplets, or sixteenths.",
+    },
+    {
+      id: "setup-inputmode",
+      targetId: "setup-inputmode",
+      title: "Microphone or Tap",
+      description: "Microphone listens for real hits through your mic. Tap lets you practice by pressing a button instead — no mic needed.",
+    },
+    {
+      id: "setup-start",
+      targetId: "setup-start",
+      title: "Start",
+      description: "Starts the metronome with a short count-in, then begins tracking your timing.",
+    },
+    {
+      id: "session-beatindicator",
+      targetId: "session-beatindicator",
+      title: "Beat indicator",
+      description: "These dots pulse in real time with the metronome's beat, so you can follow the tempo visually too.",
+      before: showSessionPreview,
+      delayBefore: 250,
+    },
+    {
+      id: "session-stop",
+      targetId: "session-stop",
+      title: "Stop",
+      description: "Stops the session at any time — you don't have to wait for it to finish on its own.",
+    },
+    {
+      id: "report-result",
+      targetId: "report-result",
+      title: "Result",
+      description: "The headline number for the session — the percentage of hits that landed on time.",
+      before: showReportPreview,
+      delayBefore: 250,
+    },
+    {
+      id: "report-status",
+      targetId: "report-status",
+      title: "Early, on time, late",
+      description: "The same result broken down by how each hit missed, when it did — early, on time, or late.",
+    },
+    {
+      id: "report-debugchart",
+      targetId: "report-debugchart",
+      title: "Timing Analysis",
+      description: "The full waveform against the beat grid — the red line marks exactly where each hit landed.",
+    },
+  ];
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -223,16 +316,11 @@ export default function Home() {
   const [syncStatus, setSyncStatus] = useState<OnsetStatus | null>(null);
   const [syncOffsetMs, setSyncOffsetMs] = useState<number | null>(null);
 
-  // Shown before even the tutorial, on every launch, unless the user
-  // opted out via its own "Don't show this again" checkbox — see
+  // Shown before everything else, on every launch, unless the user opted
+  // out via its own "Don't show this again" checkbox — see
   // components/wired-headphones-notice.tsx, which self-checks AsyncStorage
   // and calls back immediately without rendering if permanently dismissed.
   const [showHeadphonesNotice, setShowHeadphonesNotice] = useState(true);
-  // Shown once, before everything else (including the mic permission gate)
-  // — see components/tutorial-screen.tsx, which self-checks AsyncStorage
-  // and calls back immediately without rendering if already dismissed in a
-  // previous session.
-  const [showTutorial, setShowTutorial] = useState(true);
   // UI-only setup step, shown before every session — no wiring to bpm/phase
   // or the metronome engine yet, just local visual selection state (see
   // components/session-setup.tsx).
@@ -241,6 +329,13 @@ export default function Home() {
   // see components/challenge-screen.tsx, which owns its own list/session/
   // report state once mounted and never touches any of Home's own state.
   const [showChallenges, setShowChallenges] = useState(false);
+  // True only while the main tour's session-preview steps are showing (see
+  // buildMainTourSteps' showSessionPreview) — lets the recording screen's
+  // BeatIndicator/Stop button display as if a session were running
+  // without actually flipping `phase`, which would arm SyncRecorder for
+  // real (microphone permission, audio prep). Nothing reads this except
+  // those two elements' own display condition below.
+  const [isTourSessionPreview, setIsTourSessionPreview] = useState(false);
   // Gates the setup UI below until microphone access is granted — see
   // components/mic-permission-gate.tsx, which also fires the native
   // permission prompt itself the first time this is false.
@@ -273,9 +368,90 @@ export default function Home() {
   // would land on the report screen instead of setup despite explicitly
   // tapping back.
   const suppressReportRef = useRef(false);
+  // The user's real inputMode, saved by showMainTourSessionPreview right
+  // before it force-selects "microphone" (the session-stop spotlight
+  // target only exists in that branch — see the recording screen's own
+  // inputMode === "tap" split below) and restored by endMainTourPreview.
+  const mainTourPreviousInputModeRef = useRef<InputSource>(inputMode);
   const insets = useSafeAreaInsets();
 
   useKeepAwake();
+
+  const { startTour } = useTourGuide();
+
+  // Cleanup for the main tour's simulated session/report screens — called
+  // from runMainTour's own onTourEnd regardless of whether the tour
+  // finished or was skipped, so no fake state (or the fake report itself)
+  // is ever left visible once the tour is over.
+  const endMainTourPreview = () => {
+    setIsTourSessionPreview(false);
+    setReport(null);
+    setShowSetup(true);
+    setInputMode(mainTourPreviousInputModeRef.current);
+  };
+
+  // The main tour's two screen transitions (see buildMainTourSteps' own
+  // before hooks). Neither touches `phase`, start()/stop(), or
+  // SyncRecorder/TapRecorder's isArmed prop, so nothing here can ever
+  // trigger a real recording, a mic permission prompt, or real audio —
+  // see isTourSessionPreview and lib/fake-report.ts.
+  const showMainTourSessionPreview = async () => {
+    // The session-stop spotlight target only exists in the "microphone"
+    // branch of the recording screen below — force-select it for the
+    // preview regardless of the user's real choice, restored by
+    // endMainTourPreview. SyncRecorder still never arms for real (its own
+    // isArmed prop stays tied strictly to `phase`, untouched here).
+    mainTourPreviousInputModeRef.current = inputMode;
+    setInputMode("microphone");
+    setShowSetup(false);
+    setIsTourSessionPreview(true);
+    await waitForNextFrame();
+  };
+
+  const showMainTourReportPreview = async () => {
+    setIsTourSessionPreview(false);
+    setReport(buildTourPreviewReport());
+    await waitForNextFrame();
+  };
+
+  const runMainTour = () => {
+    startTour(buildMainTourSteps(showMainTourSessionPreview, showMainTourReportPreview), {
+      ...tourTheme,
+      tourId: "mainTour",
+      showProgressDots: true,
+      // Chains straight into the Challenge tour either way — completed or
+      // skipped. Just navigating to Challenges is enough: ChallengeScreen's
+      // own mount effect (see components/challenge-screen.tsx) already
+      // auto-starts Tour 2 the first time it sees an unseen flag, exactly
+      // as if the user had opened Challenges on their own. Tour 2 still
+      // has its own Skip button, so a user who wants out of *both* tours
+      // is never actually trapped — one more Skip and they're done.
+      onTourEnd: () => {
+        endMainTourPreview();
+        markMainTourSeen();
+        setShowChallenges(true);
+      },
+    });
+  };
+
+  // Fires once, the very first time the setup screen is actually visible.
+  // Gated on !showHeadphonesNotice too: showSetup is already true from the
+  // very first render (before that notice even mounts), so without this
+  // check the tour would try to spotlight setup-screen elements that
+  // aren't mounted yet — WiredHeadphonesNotice is still covering the
+  // screen — and either measure nothing or visually collide with it.
+  useEffect(() => {
+    if (!showSetup || showHeadphonesNotice) return;
+    let cancelled = false;
+    getHasSeenMainTour().then((seen) => {
+      if (cancelled || seen) return;
+      runMainTour();
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSetup, showHeadphonesNotice]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -408,10 +584,6 @@ export default function Home() {
     );
   }
 
-  if (showTutorial) {
-    return <TutorialScreen onDone={() => setShowTutorial(false)} />;
-  }
-
   if (showChallenges) {
     return (
       <ChallengeScreen
@@ -531,8 +703,16 @@ export default function Home() {
 
         {/* Only shown once a session is actually running (after Start) —
             the setup screen already lets you preview subdivisions before
-            starting, so there's nothing useful to light up while idle. */}
-        {phase !== "idle" && <BeatIndicator isActive />}
+            starting, so there's nothing useful to light up while idle.
+            isTourSessionPreview is the main tour's own simulated session
+            (see runMainTour) — real onBeat events never fire during it, so
+            the dots just sit static, which is fine for a spotlight step
+            that only needs the element visible, not actively pulsing. */}
+        {(phase !== "idle" || isTourSessionPreview) && (
+          <TourTarget id="session-beatindicator">
+            <BeatIndicator isActive />
+          </TourTarget>
+        )}
 
         {/* Which off-beat note to evaluate — only meaningful for
             "triplet"/"sixteenth", and only changeable before Start (the
@@ -640,45 +820,47 @@ export default function Home() {
 
             <TempoRuler bpm={bpm} onChange={applyBpm} disabled={phase !== "idle"} />
 
-            <Pressable
-              onPress={togglePlay}
-              className="self-stretch py-5 rounded-2xl items-center justify-center active:opacity-70 border-2 flex-row gap-2.5"
-              style={{
-                borderColor: ACCENT_COLOR,
-                shadowColor: ACCENT_COLOR,
-                shadowOpacity: 0.5,
-                shadowRadius: 14,
-                shadowOffset: { width: 0, height: 0 },
-              }}
-            >
-              {phase !== "idle" ? (
-                <View style={{ width: 16, height: 16, borderRadius: 3, backgroundColor: ACCENT_COLOR }} />
-              ) : (
-                <View
-                  style={{
-                    width: 0,
-                    height: 0,
-                    borderTopWidth: 9,
-                    borderBottomWidth: 9,
-                    borderLeftWidth: 14,
-                    borderTopColor: "transparent",
-                    borderBottomColor: "transparent",
-                    borderLeftColor: ACCENT_COLOR,
-                  }}
-                />
-              )}
-              <Text
-                className="text-xl font-extrabold uppercase tracking-widest"
+            <TourTarget id="session-stop" style={{ borderRadius: 16 }}>
+              <Pressable
+                onPress={togglePlay}
+                className="self-stretch py-5 rounded-2xl items-center justify-center active:opacity-70 border-2 flex-row gap-2.5"
                 style={{
-                  color: ACCENT_COLOR,
-                  textShadowColor: "rgba(255,59,48,0.6)",
-                  textShadowRadius: 12,
-                  textShadowOffset: { width: 0, height: 0 },
+                  borderColor: ACCENT_COLOR,
+                  shadowColor: ACCENT_COLOR,
+                  shadowOpacity: 0.5,
+                  shadowRadius: 14,
+                  shadowOffset: { width: 0, height: 0 },
                 }}
               >
-                {phase !== "idle" ? "Stop" : "Start"}
-              </Text>
-            </Pressable>
+                {phase !== "idle" || isTourSessionPreview ? (
+                  <View style={{ width: 16, height: 16, borderRadius: 3, backgroundColor: ACCENT_COLOR }} />
+                ) : (
+                  <View
+                    style={{
+                      width: 0,
+                      height: 0,
+                      borderTopWidth: 9,
+                      borderBottomWidth: 9,
+                      borderLeftWidth: 14,
+                      borderTopColor: "transparent",
+                      borderBottomColor: "transparent",
+                      borderLeftColor: ACCENT_COLOR,
+                    }}
+                  />
+                )}
+                <Text
+                  className="text-xl font-extrabold uppercase tracking-widest"
+                  style={{
+                    color: ACCENT_COLOR,
+                    textShadowColor: "rgba(255,59,48,0.6)",
+                    textShadowRadius: 12,
+                    textShadowOffset: { width: 0, height: 0 },
+                  }}
+                >
+                  {phase !== "idle" || isTourSessionPreview ? "Stop" : "Start"}
+                </Text>
+              </Pressable>
+            </TourTarget>
           </>
         )}
       </View>

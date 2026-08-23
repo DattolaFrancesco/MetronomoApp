@@ -14,9 +14,9 @@ const BAR_WIDTH = 160;
 const KNOB_WIDTH = BAR_WIDTH * 0.4;
 
 // Shown wherever a screen would otherwise flash blank while it resolves an
-// async gate on mount (see TutorialScreen/MicPermissionGate's "checking"
-// state) — most visibly right after the native splash image hides but
-// before the first real screen is ready.
+// async gate on mount (see WiredHeadphonesNotice/MicPermissionGate's
+// "checking" state) — most visibly right after the native splash image
+// hides but before the first real screen is ready.
 export default function LoadingScreen() {
   const progress = useSharedValue(0);
 

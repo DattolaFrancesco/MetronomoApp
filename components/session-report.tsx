@@ -6,6 +6,7 @@ import type {
   SessionSummary,
   Subdivision,
 } from "@/components/sync-recorder";
+import { TourTarget } from "@wrack/react-native-tour-guide";
 import { LinearGradient } from "expo-linear-gradient";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -160,38 +161,44 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
             </Text>
           ) : (
             <>
-              <Text
-                className="text-6xl font-bold"
-                style={{
-                  color: ACCENT_COLOR,
-                  textShadowColor: "rgba(255,59,48,0.55)",
-                  textShadowRadius: 20,
-                  textShadowOffset: { width: 0, height: 0 },
-                }}
-              >
-                {accuracy}%
-              </Text>
-              <Text className="text-white/60 text-xs font-semibold">
-                {onTimeCount} of {total} hits on time
-              </Text>
+              <TourTarget id="report-result">
+                <View className="items-center">
+                  <Text
+                    className="text-6xl font-bold"
+                    style={{
+                      color: ACCENT_COLOR,
+                      textShadowColor: "rgba(255,59,48,0.55)",
+                      textShadowRadius: 20,
+                      textShadowOffset: { width: 0, height: 0 },
+                    }}
+                  >
+                    {accuracy}%
+                  </Text>
+                  <Text className="text-white/60 text-xs font-semibold">
+                    {onTimeCount} of {total} hits on time
+                  </Text>
+                </View>
+              </TourTarget>
 
-              <View className="flex-row justify-center gap-8 mt-1">
-                <StatCount
-                  color={countColor(onTimeCount, true)}
-                  label={STATUS_META.onTime.label}
-                  count={onTimeCount}
-                />
-                <StatCount
-                  color={countColor(earlyCount, false)}
-                  label={STATUS_META.early.label}
-                  count={earlyCount}
-                />
-                <StatCount
-                  color={countColor(lateCount, false)}
-                  label={STATUS_META.late.label}
-                  count={lateCount}
-                />
-              </View>
+              <TourTarget id="report-status">
+                <View className="flex-row justify-center gap-8 mt-1">
+                  <StatCount
+                    color={countColor(onTimeCount, true)}
+                    label={STATUS_META.onTime.label}
+                    count={onTimeCount}
+                  />
+                  <StatCount
+                    color={countColor(earlyCount, false)}
+                    label={STATUS_META.early.label}
+                    count={earlyCount}
+                  />
+                  <StatCount
+                    color={countColor(lateCount, false)}
+                    label={STATUS_META.late.label}
+                    count={lateCount}
+                  />
+                </View>
+              </TourTarget>
 
               <View className="flex-row flex-wrap justify-center gap-2 mt-2">
                 {sortedEvents.map((event) => (
@@ -202,15 +209,17 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
           )}
         </DarkPanel>
 
-        <DarkPanel className="px-4 py-4 gap-3 w-full">
-          <Text
-            className="text-[11px] font-bold uppercase tracking-[2px]"
-            style={{ color: ACCENT_COLOR }}
-          >
-            Timing Analysis
-          </Text>
-          <DebugChart summary={summary} />
-        </DarkPanel>
+        <TourTarget id="report-debugchart" style={{ borderRadius: 16 }}>
+          <DarkPanel className="px-4 py-4 gap-3 w-full">
+            <Text
+              className="text-[11px] font-bold uppercase tracking-[2px]"
+              style={{ color: ACCENT_COLOR }}
+            >
+              Timing Analysis
+            </Text>
+            <DebugChart summary={summary} />
+          </DarkPanel>
+        </TourTarget>
 
         <Pressable
           onPress={onNewSession}
