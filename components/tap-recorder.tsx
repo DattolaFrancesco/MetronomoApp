@@ -3,6 +3,7 @@ import {
   analyzeTapSession,
   BEATS_PER_BAR,
   classifyOnset,
+  currentWindowHalfMs,
   DEFAULT_TOLERANCE_MS,
   evaluatedSubBeats,
   SUBDIVISION_STEPS,
@@ -110,6 +111,19 @@ export default function TapRecorder({
   const sessionStartRef = useRef<number | null>(null);
   const recordingStartedRef = useRef(false);
   const recordingStartBeatRef = useRef<number | null>(null);
+  // True from the count-in's last beat onward (see maybeArmCapture) — one
+  // beat *before* recordingStartedRef flips, mirroring SyncRecorder's own
+  // audio-pipeline lead-in. Without this, a tap thrown slightly early for
+  // beat 1 (completely normal — matchRadius already tolerates an early hit
+  // once it's recorded, see matchTapsToExpectedHits) would land before
+  // recordingStartedRef ever goes true and be silently dropped instead of
+  // scored, systematically costing beat 1's own evaluated hit.
+  const captureArmedRef = useRef(false);
+  // Raw Date.now() timestamps for taps pressed after captureArmedRef but
+  // before sessionStartRef is known (i.e. during the count-in's last beat)
+  // — flushed into tapTimesRef as negative (before beat 1) elapsedMs values
+  // the moment maybeStartTrackedSession learns the real session start.
+  const pendingEarlyTapTimesRef = useRef<number[]>([]);
   const tapTimesRef = useRef<number[]>([]);
   const lastBeatRef = useRef(-1);
   const lastBeatTimeRef = useRef(0);
@@ -162,10 +176,24 @@ export default function TapRecorder({
     return 60000 / bpmRef.current;
   }
 
-  // Flips on the tracked session — this is "beat 1". No lead-in warm-up
-  // needed here (unlike SyncRecorder's maybeStartAudioPipeline): there's no
-  // recorder/mic startup latency to absorb, so the tracked session can
-  // start exactly on the beat the count-in elapses.
+  // Arms tap capture one beat *before* the tracked session actually starts
+  // — see captureArmedRef. Idempotent, same guard shape as SyncRecorder's
+  // maybeStartAudioPipeline.
+  function maybeArmCapture(beat: number) {
+    if (!isArmedRef.current || captureArmedRef.current) return;
+    const leadInBeat = Math.max(0, countInBeatsRef.current - 1);
+    if (beat < leadInBeat) return;
+    captureArmedRef.current = true;
+  }
+
+  // Flips on the tracked session — this is "beat 1". Unlike SyncRecorder's
+  // maybeStartAudioPipeline there's no recorder/mic startup latency to
+  // absorb, so the *session clock* (elapsedMs=0) still starts exactly on
+  // the beat the count-in elapses — only tap *capture* itself is armed a
+  // beat early (see maybeArmCapture/captureArmedRef), so an early tap gets
+  // timestamped instead of dropped. Any such tap already sitting in
+  // pendingEarlyTapTimesRef gets flushed here into tapTimesRef, now that
+  // the real session start is finally known.
   function maybeStartTrackedSession(beat: number, now: number) {
     if (!isArmedRef.current || recordingStartedRef.current) return;
     if (beat < countInBeatsRef.current) return;
@@ -173,6 +201,14 @@ export default function TapRecorder({
     recordingStartedRef.current = true;
     recordingStartBeatRef.current = beat;
     sessionStartRef.current = now;
+
+    if (pendingEarlyTapTimesRef.current.length) {
+      for (const tapTime of pendingEarlyTapTimesRef.current) {
+        tapTimesRef.current.push(tapTime - now);
+      }
+      pendingEarlyTapTimesRef.current = [];
+    }
+
     onRecordingStartRef.current?.();
   }
 
@@ -205,6 +241,7 @@ export default function TapRecorder({
           return;
         }
 
+        maybeArmCapture(beat);
         maybeStartTrackedSession(beat, now);
       },
     );
@@ -230,10 +267,11 @@ export default function TapRecorder({
   // The button's single onPress handler. While not armed yet, a press means
   // "start" (see onRequestStart above) rather than a scored hit; once armed
   // (count-in running or recording), it registers a tap — which itself
-  // still no-ops (after flashing) until the count-in has actually elapsed,
-  // i.e. recordingStartedRef is true. Kept as one function (not split into
-  // a separate handleTap called from here) so it stays the direct, provably
-  // event-only entry point for every Date.now()/ref read below.
+  // still no-ops (after flashing) until the count-in's last beat has
+  // elapsed, i.e. captureArmedRef is true (see maybeArmCapture). Kept as
+  // one function (not split into a separate handleTap called from here) so
+  // it stays the direct, provably event-only entry point for every
+  // Date.now()/ref read below.
   //
   // The click itself comes from expo-precision-metronome's own native
   // engine (see its MetronomeEngine.requestTapClick/renderTapClick), not a
@@ -251,12 +289,21 @@ export default function TapRecorder({
       onRequestStartRef.current?.();
       return;
     }
-    if (!recordingStartedRef.current || sessionStartRef.current === null) {
+    // Too early even for the lead-in beat (still mid count-in) — nothing
+    // meaningful to record yet.
+    if (!captureArmedRef.current) {
       return;
     }
 
     const now = Date.now();
-    tapTimesRef.current.push(now - sessionStartRef.current);
+    if (sessionStartRef.current !== null) {
+      tapTimesRef.current.push(now - sessionStartRef.current);
+    } else {
+      // Lead-in beat: beat 1 (and the session's own start timestamp)
+      // hasn't fired yet — queued and converted to a real (negative)
+      // elapsedMs by maybeStartTrackedSession once it has.
+      pendingEarlyTapTimesRef.current.push(now);
+    }
     setTapCount((c) => c + 1);
 
     // Live feedback only — the same offline comparison analyzeTapSession
@@ -327,7 +374,13 @@ export default function TapRecorder({
           sixteenthTarget: sixteenthTargetRef.current,
           waveform: [],
           maxBars: maxBarsRef.current,
-          leadInMs: 0,
+          // A tap pressed during the count-in's last beat (see
+          // captureArmedRef) can land before elapsedMs=0 — same tempo-
+          // adaptive margin as SyncRecorder's own leadInMs, and the same
+          // formula DebugChart already uses for its "after the last beat"
+          // margin, so the report's first bar has room to actually draw
+          // that hit instead of clipping it at the bar's left edge.
+          leadInMs: currentWindowHalfMs(60000 / bpmRef.current),
           inputSource: "tap",
           tapTimesMs: [...tapTimesRef.current],
         });
@@ -337,6 +390,8 @@ export default function TapRecorder({
 
       recordingStartedRef.current = false;
       recordingStartBeatRef.current = null;
+      captureArmedRef.current = false;
+      pendingEarlyTapTimesRef.current = [];
       tapTimesRef.current = [];
       lastBeatRef.current = -1;
       setTapCount(0);
