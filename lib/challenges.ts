@@ -46,10 +46,13 @@ export type ChallengeSegment = {
 export type ChallengeId =
   | "battere-poi-levare"
   | "levare-poi-battere"
+  | "battere-levare-battere"
   | "battere-poi-sedicesimo2"
   | "battere-poi-terzina3"
+  | "sedicesimo2-battere-sedicesimo4"
   | "levare-poi-sedicesimo2"
   | "giro-sedicesimi"
+  | "doppia-alternanza-levare"
   | "battere-levare-terzina3"
   | "alternanza-battuta";
 
@@ -155,6 +158,15 @@ export const CHALLENGES: Challenge[] = [
     quarterSegments: [...bar(LEVARE), ...bar(BATTERE)],
   },
   {
+    id: "battere-levare-battere",
+    name: "Downbeat → Upbeat → Downbeat",
+    difficulty: "facile",
+    toleranceMs: 100,
+    description:
+      "Three bars in a row: one on the downbeat, then one on the upbeat, then back to the downbeat.",
+    quarterSegments: [...bar(BATTERE), ...bar(LEVARE), ...bar(BATTERE)],
+  },
+  {
     id: "battere-poi-sedicesimo2",
     name: "Downbeat → 2nd Sixteenth",
     difficulty: "medio",
@@ -171,6 +183,15 @@ export const CHALLENGES: Challenge[] = [
     description:
       "One bar on the downbeat (the quarters), then immediately one bar on the third note of each triplet.",
     quarterSegments: [...bar(BATTERE), ...bar(TERZINA_3)],
+  },
+  {
+    id: "sedicesimo2-battere-sedicesimo4",
+    name: "2nd Sixteenth → Downbeat → 4th Sixteenth",
+    difficulty: "medio",
+    toleranceMs: 90,
+    description:
+      "Three bars in a row: the second sixteenth of each quarter, then the downbeat, then the fourth sixteenth.",
+    quarterSegments: [...bar(SEDICESIMO_2), ...bar(BATTERE), ...bar(SEDICESIMO_4)],
   },
   {
     id: "levare-poi-sedicesimo2",
@@ -193,6 +214,19 @@ export const CHALLENGES: Challenge[] = [
       ...bar(SEDICESIMO_2),
       ...bar(SEDICESIMO_3),
       ...bar(SEDICESIMO_4),
+    ],
+  },
+  {
+    id: "doppia-alternanza-levare",
+    name: "Alternating 16th/Downbeat → Upbeat → Alternating 16th/Upbeat",
+    difficulty: "difficile",
+    toleranceMs: 80,
+    description:
+      "Three bars: the first alternates the second sixteenth and the downbeat every quarter, the second bar is all upbeat, and the third alternates the fourth sixteenth and the upbeat every quarter.",
+    quarterSegments: [
+      SEDICESIMO_2, BATTERE, SEDICESIMO_2, BATTERE,
+      ...bar(LEVARE),
+      SEDICESIMO_4, LEVARE, SEDICESIMO_4, LEVARE,
     ],
   },
   {

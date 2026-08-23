@@ -1,4 +1,4 @@
-import BeatIndicator from "@/components/beat-indicator";
+import ChallengeGuide from "@/components/challenge-guide";
 import DarkPanel from "@/components/dark-panel";
 import DebugChart from "@/components/debug-chart";
 import { GlowDivider } from "@/components/session-setup";
@@ -427,19 +427,17 @@ function ChallengeSession({
       style={{ flex: 1 }}
     >
       <View
-        className="flex-1 px-5 justify-between gap-6"
+        className="flex-1 px-5 justify-between gap-3"
         style={{
           paddingTop: insets.top + 16,
           paddingBottom: insets.bottom + 24,
         }}
       >
-        <View style={{ minHeight: 40, justifyContent: "center", paddingHorizontal: 48 }}>
+        <View style={{ height: 40, justifyContent: "center" }}>
           <Pressable
             onPress={handleBack}
-            className="absolute w-10 h-10 rounded-full items-center justify-center active:opacity-60"
+            className="w-10 h-10 rounded-full items-center justify-center active:opacity-60"
             style={{
-              left: 0,
-              zIndex: 10,
               backgroundColor: "rgba(255,255,255,0.06)",
               borderWidth: 1,
               borderColor: "rgba(255,255,255,0.12)",
@@ -447,30 +445,7 @@ function ChallengeSession({
           >
             <Text className="text-white text-lg">←</Text>
           </Pressable>
-          {/* Challenge names vary a lot in length (e.g. "Downbeat → Upbeat
-              → 3rd Triplet") — wraps up to 2 lines and shrinks itself
-              rather than overflowing past the screen edge or the back
-              button. */}
-          <Text
-            className="text-center text-base font-extrabold uppercase tracking-[2px]"
-            style={{ color: ACCENT_COLOR }}
-            numberOfLines={2}
-            adjustsFontSizeToFit
-          >
-            {challenge.name}
-          </Text>
         </View>
-
-        {/* Same reasoning as the list's own tolerance line — a harder
-            challenge isn't just "more notes", its hit window is also
-            objectively tighter (see CHALLENGES in lib/challenges.ts), and
-            that's easy to misread as "I'm getting worse" without this. */}
-        <Text
-          className="text-center text-[11px] font-bold uppercase tracking-wider -mt-4"
-          style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
-        >
-          {DIFFICULTY_LABEL[challenge.difficulty]} · ±{challenge.toleranceMs}ms tolerance
-        </Text>
 
         <GlowDivider />
 
@@ -479,16 +454,22 @@ function ChallengeSession({
             once the count-in ends would go straight to the flex:1
             TapRecorder/SyncRecorder area below, visibly growing the tap
             button right after the count-in finishes. */}
-        <View className="items-center justify-center py-2" style={{ height: 120 }}>
+        <View className="items-center justify-center" style={{ height: 76 }}>
           <Text
-            className="text-8xl font-bold text-white"
-            style={{ lineHeight: 104 }}
+            className="text-6xl font-bold text-white"
+            style={{ lineHeight: 68 }}
           >
             {isCountIn ? (countInBeat ?? "") : ""}
           </Text>
         </View>
 
-        {phase !== "idle" && <BeatIndicator isActive />}
+        {/* Mounted from idle onward (not just once armed) so the player can
+            see the whole pattern and prepare before ever pressing Start —
+            it already renders every row as a dimmed, un-highlighted
+            preview until a real beat arrives (see ChallengeGuide's own
+            beat === null handling), so idle just looks like "nothing
+            live yet", not broken. */}
+        <ChallengeGuide challenge={challenge} countInBeats={COUNT_IN_BEATS} />
 
         {inputMode === "tap" ? (
           <>

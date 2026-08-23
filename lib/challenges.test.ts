@@ -64,25 +64,28 @@ function buildWaveform(hitTimesMs: number[], leadInMs: number = LEAD_IN_MS): num
 }
 
 describe("CHALLENGES — data", () => {
-  test("8 challenges, ordered easiest to hardest, with the expected per-tier tolerance", () => {
+  test("11 challenges, ordered easiest to hardest, with the expected per-tier tolerance", () => {
     expect(CHALLENGES.map((c) => c.id)).toEqual([
       "battere-poi-levare",
       "levare-poi-battere",
+      "battere-levare-battere",
       "battere-poi-sedicesimo2",
       "battere-poi-terzina3",
+      "sedicesimo2-battere-sedicesimo4",
       "levare-poi-sedicesimo2",
       "giro-sedicesimi",
+      "doppia-alternanza-levare",
       "battere-levare-terzina3",
       "alternanza-battuta",
     ]);
     expect(CHALLENGES.map((c) => c.difficulty)).toEqual([
-      "facile", "facile",
-      "medio", "medio",
-      "difficile", "difficile",
+      "facile", "facile", "facile",
+      "medio", "medio", "medio",
+      "difficile", "difficile", "difficile",
       "expert", "expert",
     ]);
     expect(CHALLENGES.map((c) => c.toleranceMs)).toEqual([
-      100, 100, 90, 90, 80, 80, 70, 70,
+      100, 100, 100, 90, 90, 90, 80, 80, 80, 70, 70,
     ]);
   });
 
@@ -192,6 +195,32 @@ describe("scoreChallenge — levare-poi-battere (same pair as easy-1, reversed o
   });
 });
 
+describe("scoreChallenge — battere-levare-battere (downbeat, upbeat, back to downbeat over 3 bars)", () => {
+  const challenge = getChallenge("battere-levare-battere");
+
+  test("passes when all 12 hits across the 3 bars (downbeat, upbeat, downbeat) land on time", () => {
+    const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
+
+    expect(result.hits).toHaveLength(12);
+    expect(result.hits.map((h) => h.label)).toEqual([
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
+      "Upbeat 1", "Upbeat 2", "Upbeat 3", "Upbeat 4",
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
+    ]);
+    expect(result.passed).toBe(true);
+  });
+
+  test("fails if the third bar is played on the upbeat again instead of switching back to the downbeat", () => {
+    const bar1and2 = allTargetsMs(challenge).slice(0, 8);
+    const wrongBar3 = [4250, 4750, 5250, 5750]; // upbeat positions, not downbeat
+    const result = scoreChallenge(challenge, buildWaveform([...bar1and2, ...wrongBar3]), BPM, LEAD_IN_MS);
+
+    expect(result.hits.slice(0, 8).every((h) => h.onTime)).toBe(true);
+    expect(result.hits.slice(8).every((h) => h.onTime)).toBe(false);
+    expect(result.passed).toBe(false);
+  });
+});
+
 describe("scoreChallenge — battere-poi-terzina3 (triplet-based pairing)", () => {
   test("passes when bar 2 lands on the triplet's 3rd note", () => {
     const challenge = getChallenge("battere-poi-terzina3");
@@ -202,6 +231,34 @@ describe("scoreChallenge — battere-poi-terzina3 (triplet-based pairing)", () =
       "Triplet-3 1", "Triplet-3 2", "Triplet-3 3", "Triplet-3 4",
     ]);
     expect(result.passed).toBe(true);
+  });
+});
+
+describe("scoreChallenge — sedicesimo2-battere-sedicesimo4 (2nd sixteenth, downbeat, 4th sixteenth over 3 bars)", () => {
+  const challenge = getChallenge("sedicesimo2-battere-sedicesimo4");
+
+  test("passes when all 12 hits across the 3 bars (2nd sixteenth, downbeat, 4th sixteenth) land on time", () => {
+    const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
+
+    expect(result.hits).toHaveLength(12);
+    expect(result.hits.map((h) => h.label)).toEqual([
+      "Sixteenth-2 1", "Sixteenth-2 2", "Sixteenth-2 3", "Sixteenth-2 4",
+      "Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4",
+      "Sixteenth-4 1", "Sixteenth-4 2", "Sixteenth-4 3", "Sixteenth-4 4",
+    ]);
+    expect(result.passed).toBe(true);
+  });
+
+  test("fails if the middle bar is played on the 2nd sixteenth again instead of the downbeat", () => {
+    const bar1 = allTargetsMs(challenge).slice(0, 4);
+    const wrongBar2 = bar1.map((t) => t + 2000); // same 2nd-sixteenth offsets, bar 2's timing
+    const bar3 = allTargetsMs(challenge).slice(8);
+    const result = scoreChallenge(challenge, buildWaveform([...bar1, ...wrongBar2, ...bar3]), BPM, LEAD_IN_MS);
+
+    expect(result.hits.slice(0, 4).every((h) => h.onTime)).toBe(true);
+    expect(result.hits.slice(4, 8).every((h) => h.onTime)).toBe(false);
+    expect(result.hits.slice(8).every((h) => h.onTime)).toBe(true);
+    expect(result.passed).toBe(false);
   });
 });
 
@@ -227,6 +284,46 @@ describe("scoreChallenge — giro-sedicesimi (four bars, one per sixteenth posit
 
     expect(result.hits.slice(0, 12).every((h) => h.onTime)).toBe(true);
     expect(result.hits.slice(12).every((h) => h.onTime)).toBe(false);
+    expect(result.passed).toBe(false);
+  });
+});
+
+describe("scoreChallenge — doppia-alternanza-levare (mixed subdivision within two of the three bars)", () => {
+  const challenge = getChallenge("doppia-alternanza-levare");
+
+  test("passes when bar 1 alternates 2nd-sixteenth/downbeat, bar 2 is all upbeat, bar 3 alternates 4th-sixteenth/upbeat", () => {
+    const result = scoreChallenge(challenge, buildWaveform(allTargetsMs(challenge)), BPM, LEAD_IN_MS);
+
+    expect(result.hits).toHaveLength(12);
+    expect(result.hits.map((h) => h.label)).toEqual([
+      "Sixteenth-2 1", "Quarter 2", "Sixteenth-2 3", "Quarter 4",
+      "Upbeat 1", "Upbeat 2", "Upbeat 3", "Upbeat 4",
+      "Sixteenth-4 1", "Upbeat 2", "Sixteenth-4 3", "Upbeat 4",
+    ]);
+    expect(result.passed).toBe(true);
+  });
+
+  test("fails if bar 2 is played on the downbeat instead of the upbeat", () => {
+    const bar1 = allTargetsMs(challenge).slice(0, 4);
+    const wrongBar2 = [2000, 2500, 3000, 3500]; // downbeat positions, not upbeat
+    const bar3 = allTargetsMs(challenge).slice(8);
+    const result = scoreChallenge(challenge, buildWaveform([...bar1, ...wrongBar2, ...bar3]), BPM, LEAD_IN_MS);
+
+    expect(result.hits.slice(0, 4).every((h) => h.onTime)).toBe(true);
+    expect(result.hits.slice(4, 8).every((h) => h.onTime)).toBe(false);
+    expect(result.hits.slice(8).every((h) => h.onTime)).toBe(true);
+    expect(result.passed).toBe(false);
+  });
+
+  test("ignoring the alternation in bar 1 (playing every quarter on the downbeat) only satisfies quarters 2&4", () => {
+    const allBattereBar1 = [0, 500, 1000, 1500];
+    const rest = allTargetsMs(challenge).slice(4);
+    const result = scoreChallenge(challenge, buildWaveform([...allBattereBar1, ...rest]), BPM, LEAD_IN_MS);
+
+    expect(result.hits[0].onTime).toBe(false); // Sixteenth-2 1
+    expect(result.hits[1].onTime).toBe(true); // Quarter 2
+    expect(result.hits[2].onTime).toBe(false); // Sixteenth-2 3
+    expect(result.hits[3].onTime).toBe(true); // Quarter 4
     expect(result.passed).toBe(false);
   });
 });
