@@ -6,6 +6,7 @@ import {
   currentWindowHalfMs,
   DEFAULT_TOLERANCE_MS,
   evaluatedSubBeats,
+  isPerfectAlignment,
   SUBDIVISION_STEPS,
   type OnsetStatus,
   type SessionSummary,
@@ -112,12 +113,6 @@ export default function TapRecorder({
   const [latencyCompensationMs, setLatencyCompensationMs] = useState(
     FALLBACK_LATENCY_COMPENSATION_MS,
   );
-  // Temporary on-screen diagnostics for the getOutputLatencyMs fetch below
-  // — lets it be debugged straight off the phone (raw return value, or the
-  // exact error if the native call is throwing) without needing a live
-  // Xcode console attached. Remove once latencyCompensationMs is confirmed
-  // reliable across devices.
-  const [latencyDebugInfo, setLatencyDebugInfo] = useState("not fetched yet");
   // Drives the button's flash/glow: snapped to 1 on every press (armed or
   // not, scored or not — always the same red, no accuracy color-coding),
   // then animated back down to 0 — see triggerFlash below. useState (not
@@ -384,6 +379,15 @@ export default function TapRecorder({
     const status = classifyOnset(delta, toleranceRef.current);
     onStatusChangeRef.current?.(status, delta);
 
+    // Bonus reward chime, layered on top of (not instead of) the regular
+    // tap click above — see isPerfectAlignment for why this is always a
+    // strictly tighter band than onTime, regardless of the session's own
+    // tolerance. Same count-in guard as the regular click: no audio during
+    // the count-in even though a lead-in-beat tap still gets scored.
+    if (recordingStartedRef.current && isPerfectAlignment(delta, toleranceRef.current)) {
+      ExpoPrecisionMetronomeModule.playPerfectClick();
+    }
+
     if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
     statusTimeoutRef.current = setTimeout(() => {
       onStatusChangeRef.current?.(null, null);
@@ -425,24 +429,14 @@ export default function TapRecorder({
             setLatencyCompensationMs(
               outputLatencyMs + TOUCH_LATENCY_ESTIMATE_MS,
             );
-            setLatencyDebugInfo(`ok: raw=${outputLatencyMs.toFixed(2)}ms`);
             return;
           }
           // 0 (or negative) isn't a real reading — session likely not
           // active yet, see the comment above. Retry instead of giving up.
-          setLatencyDebugInfo(
-            `attempt ${attempt + 1}/${MAX_ATTEMPTS}: raw=${outputLatencyMs}`,
-          );
           scheduleRetry();
         })
-        .catch((err) => {
+        .catch(() => {
           if (cancelled) return;
-          // A rejection is not the same as "not ready yet" — surfaced on
-          // screen (not just swallowed) since this is exactly the kind of
-          // failure a silent .catch would otherwise hide forever.
-          setLatencyDebugInfo(
-            `attempt ${attempt + 1}/${MAX_ATTEMPTS} threw: ${String(err?.message ?? err)}`,
-          );
           scheduleRetry();
         });
     }
@@ -559,13 +553,6 @@ export default function TapRecorder({
         {isArmed
           ? "Tap the button in time with the metronome."
           : "Tap the button to start — no microphone needed."}
-      </Text>
-
-      {/* Debug/QA visibility for latencyCompensationMs — see its own
-          comment above. Not a setting, just makes an otherwise invisible
-          per-device value inspectable. */}
-      <Text className="text-neutral-700 text-[10px]">
-        Latency comp: {Math.round(latencyCompensationMs)}ms ({latencyDebugInfo})
       </Text>
     </DarkPanel>
   );

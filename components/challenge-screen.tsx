@@ -240,6 +240,16 @@ function ChallengeList({
               <Text className="text-neutral-500 text-xs leading-4">
                 {challenge.description}
               </Text>
+              {/* Tolerance tightens with difficulty (see CHALLENGES in
+                  lib/challenges.ts) — surfaced here so it's visible before
+                  committing to a challenge, not just discoverable by
+                  failing one and wondering why. */}
+              <Text
+                className="text-[10px] font-bold uppercase tracking-wider"
+                style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
+              >
+                ±{challenge.toleranceMs}ms tolerance
+              </Text>
             </DarkPanel>
           </Pressable>
         ))}
@@ -450,6 +460,17 @@ function ChallengeSession({
             {challenge.name}
           </Text>
         </View>
+
+        {/* Same reasoning as the list's own tolerance line — a harder
+            challenge isn't just "more notes", its hit window is also
+            objectively tighter (see CHALLENGES in lib/challenges.ts), and
+            that's easy to misread as "I'm getting worse" without this. */}
+        <Text
+          className="text-center text-[11px] font-bold uppercase tracking-wider -mt-4"
+          style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
+        >
+          {DIFFICULTY_LABEL[challenge.difficulty]} · ±{challenge.toleranceMs}ms tolerance
+        </Text>
 
         <GlowDivider />
 

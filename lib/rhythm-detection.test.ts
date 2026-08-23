@@ -7,9 +7,11 @@ import {
   computeSubBeatTimestamps,
   evaluatedSubBeats,
   findOnsetPeaks,
+  isPerfectAlignment,
   isWithinClickGate,
   matchTapsToExpectedHits,
   MIN_PEAK_AMPLITUDE,
+  PERFECT_ALIGNMENT_MS,
   pickPeakInRange,
   primarySubBeat,
   SUBDIVISION_STEPS,
@@ -251,6 +253,36 @@ describe("classifyOnset — early/on-time/late classification", () => {
 
   test("dead on time", () => {
     expect(classifyOnset(0, TOLERANCE_MS)).toBe("onTime");
+  });
+});
+
+describe("isPerfectAlignment — the tap-mode bonus-sound threshold", () => {
+  test("dead on time is always perfect", () => {
+    expect(isPerfectAlignment(0, 90)).toBe(true);
+  });
+
+  test("at a normal (90ms) tolerance, perfect uses the fixed cap (18ms)", () => {
+    expect(isPerfectAlignment(PERFECT_ALIGNMENT_MS, 90)).toBe(true);
+    expect(isPerfectAlignment(PERFECT_ALIGNMENT_MS + 1, 90)).toBe(false);
+  });
+
+  test("onTime-but-not-perfect never triggers it", () => {
+    expect(isPerfectAlignment(50, 90)).toBe(false);
+    expect(classifyOnset(50, 90)).toBe("onTime");
+  });
+
+  test("at a very tight (10ms) tolerance, perfect shrinks below the fixed cap so it stays strictly inside onTime", () => {
+    // 10 * PERFECT_ALIGNMENT_RATIO(0.3) = 3ms, well under the 18ms cap.
+    expect(isPerfectAlignment(3, 10)).toBe(true);
+    expect(isPerfectAlignment(5, 10)).toBe(false);
+    // Still classified onTime at 5ms (within the 10ms tolerance) — just
+    // not "perfect" — proving perfect is always a strict subset of onTime.
+    expect(classifyOnset(5, 10)).toBe("onTime");
+  });
+
+  test("symmetric — an early tap gets the same treatment as a late one", () => {
+    expect(isPerfectAlignment(-10, 90)).toBe(true);
+    expect(isPerfectAlignment(-20, 90)).toBe(false);
   });
 });
 

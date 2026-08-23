@@ -1,8 +1,8 @@
 diff --git a/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt b/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
-index 2377c2f..9989347 100644
+index 2377c2f..5882ce9 100644
 --- a/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
 +++ b/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
-@@ -76,5 +76,21 @@ class ExpoPrecisionMetronomeModule : Module() {
+@@ -76,5 +76,25 @@ class ExpoPrecisionMetronomeModule : Module() {
          AsyncFunction("setPattern") { pattern: List<BeatAccent> ->
              engine?.setPattern(MetronomeEngine.encodePattern(pattern))
          }
@@ -12,6 +12,10 @@ index 2377c2f..9989347 100644
 +        // requestTapClick/renderTapClick for the reference implementation
 +        // this needs to mirror through the C++ engine.
 +        AsyncFunction("playTapClick") {}
++
++        // TODO: not yet implemented on Android — see the iOS
++        // MetronomeEngine's requestPerfectClick/renderPerfectClick.
++        AsyncFunction("playPerfectClick") {}
 +
 +        // TODO: not yet implemented on Android — 0 means "unknown" to JS
 +        // callers (see TapRecorder), which fall back to a hardcoded
@@ -25,40 +29,45 @@ index 2377c2f..9989347 100644
      }
  }
 diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
-index 9ee05f7..ac9e30d 100644
+index 9ee05f7..425f663 100644
 --- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
 +++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
-@@ -6,6 +6,8 @@ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMet
+@@ -6,6 +6,9 @@ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMet
      setBpm(bpm: number): Promise<void>;
      setSound(sound: SoundPreset): Promise<void>;
      setPattern(pattern: BeatAccent[]): Promise<void>;
 +    playTapClick(): Promise<void>;
++    playPerfectClick(): Promise<void>;
 +    getOutputLatencyMs(): Promise<number>;
  }
  declare const _default: ExpoPrecisionMetronomeModule;
  export default _default;
 diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts
-index 6f66f65..046e127 100644
+index 6f66f65..e1004cf 100644
 --- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts
 +++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.d.ts
-@@ -6,6 +6,8 @@ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMet
+@@ -6,6 +6,9 @@ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMet
      setBpm(_bpm: number): Promise<void>;
      setSound(_sound: string): Promise<void>;
      setPattern(_pattern: string[]): Promise<void>;
 +    playTapClick(): Promise<void>;
++    playPerfectClick(): Promise<void>;
 +    getOutputLatencyMs(): Promise<number>;
  }
  declare const _default: typeof ExpoPrecisionMetronomeModule;
  export default _default;
 diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js
-index dad47c4..891071c 100644
+index dad47c4..ccccd5e 100644
 --- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js
 +++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.web.js
-@@ -15,6 +15,12 @@ class ExpoPrecisionMetronomeModule extends NativeModule {
+@@ -15,6 +15,15 @@ class ExpoPrecisionMetronomeModule extends NativeModule {
      async setPattern(_pattern) {
          throw new Error("ExpoPrecisionMetronome is not supported on web");
      }
 +    async playTapClick() {
++        throw new Error("ExpoPrecisionMetronome is not supported on web");
++    }
++    async playPerfectClick() {
 +        throw new Error("ExpoPrecisionMetronome is not supported on web");
 +    }
 +    async getOutputLatencyMs() {
@@ -103,10 +112,10 @@ index a9509d4..b71665f 100644
          _ ctx: RenderContext,
          freq1: Double,
 diff --git a/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift b/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
-index f0e30dc..889c45d 100644
+index f0e30dc..73b4b9a 100644
 --- a/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
 +++ b/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
-@@ -57,5 +57,21 @@ public class ExpoPrecisionMetronomeModule: Module {
+@@ -57,5 +57,28 @@ public class ExpoPrecisionMetronomeModule: Module {
          AsyncFunction("setPattern") { (pattern: [BeatAccent]) in
              self.engine?.setPattern(pattern)
          }
@@ -119,6 +128,13 @@ index f0e30dc..889c45d 100644
 +            self.engine?.requestTapClick()
 +        }
 +
++        // Fire-and-forget "perfect alignment" bonus chime — see
++        // MetronomeEngine's requestPerfectClick/renderPerfectClick. Same
++        // best-effort semantics as playTapClick above.
++        AsyncFunction("playPerfectClick") {
++            self.engine?.requestPerfectClick()
++        }
++
 +        // Real per-device audio output latency (ms) for the current route
 +        // — see MetronomeEngine.outputLatencyMs. 0 if the engine has never
 +        // been started yet (session not active), which callers should
@@ -129,10 +145,10 @@ index f0e30dc..889c45d 100644
      }
  }
 diff --git a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
-index 84cec22..35cf951 100644
+index 84cec22..6676723 100644
 --- a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
 +++ b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
-@@ -18,6 +18,27 @@ final class MetronomeEngine {
+@@ -18,6 +18,45 @@ final class MetronomeEngine {
      // Accent params captured at click onset; used for multi-buffer continuation.
      private var clickAccent: ClickSynthesizer.AccentParams = .normal
  
@@ -157,10 +173,28 @@ index 84cec22..35cf951 100644
 +    private static let tapClickFrequencyHz = 1_320.0
 +    private static let tapClickDecayTau = 0.008
 +
++    // "Perfect alignment" bonus chime: same independent on-demand-click
++    // mechanism as the tap click above (see requestPerfectClick), but a
++    // deliberately different timbre — two sustained sine tones (a fifth
++    // apart) with a much longer decay than either the tap click's dry tick
++    // or any regular beat-click preset, so it reads as a distinct, musical
++    // "ding" rather than another percussive click. Mixes additively (same
++    // as tapClick/the beat click), so it can ring over a following beat
++    // click at high BPM without cutting either off — deliberate: a
++    // lingering reward chime is the point, not a bug.
++    private var perfectClickRequestCount: Int = 0
++    private var perfectClickHandledCount: Int = 0
++    private var perfectClickPhase: Int = -1
++    private static let perfectClickDurationSeconds = 0.18
++    private static let perfectClickFreq1Hz = 1_760.0
++    private static let perfectClickFreq2Hz = 2_637.0
++    private static let perfectClickDecayTau = 0.06
++    private static let perfectClickVolume: Float = 0.7
++
      // Written from the JS thread, read from the audio render thread.
      // On ARM64 (all iOS devices), an aligned 8-byte load/store is a single LDR/STR —
      // hardware-atomic, no torn reads possible. No synchronisation primitive needed.
-@@ -55,10 +76,32 @@ final class MetronomeEngine {
+@@ -55,10 +94,39 @@ final class MetronomeEngine {
          currentPatternEncoded = MetronomeEngine.encode(pattern)
      }
  
@@ -171,6 +205,13 @@ index 84cec22..35cf951 100644
 +    func requestTapClick() {
 +        guard engine != nil else { return }
 +        tapClickRequestCount += 1
++    }
++
++    // Queues one perfect-alignment chime — same on-demand mechanism as
++    // requestTapClick above, see renderPerfectClick.
++    func requestPerfectClick() {
++        guard engine != nil else { return }
++        perfectClickRequestCount += 1
 +    }
 +
 +    // The audio system's own reported output latency for the *current*
@@ -194,17 +235,20 @@ index 84cec22..35cf951 100644
          eng.stop()
          sourceNode = nil
          engine = nil
-@@ -105,6 +148,9 @@ final class MetronomeEngine {
+@@ -105,6 +173,12 @@ final class MetronomeEngine {
          sampleRate = sr
          currentSample = 0
          clickPhase = -1
 +        tapClickPhase = -1
 +        tapClickRequestCount = 0
 +        tapClickHandledCount = 0
++        perfectClickPhase = -1
++        perfectClickRequestCount = 0
++        perfectClickHandledCount = 0
          scheduler.reset()
  
          guard let format = AVAudioFormat(standardFormatWithSampleRate: sr, channels: 1) else {
-@@ -121,14 +167,46 @@ final class MetronomeEngine {
+@@ -121,14 +195,46 @@ final class MetronomeEngine {
          newEngine.attach(node)
          newEngine.connect(node, to: newEngine.mainMixerNode, format: format)
  
@@ -254,7 +298,7 @@ index 84cec22..35cf951 100644
      }
  
      private func renderOngoingClick(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
-@@ -148,6 +226,37 @@ final class MetronomeEngine {
+@@ -148,6 +254,78 @@ final class MetronomeEngine {
          if clickPhase >= clickDurationSamples { clickPhase = -1 }
      }
  
@@ -289,18 +333,60 @@ index 84cec22..35cf951 100644
 +        if tapClickPhase >= durationSamples { tapClickPhase = -1 }
 +    }
 +
++    // Picks up a pending requestPerfectClick() call — same shape as
++    // renderTapClick, but two additive renderRawSine calls (a fifth apart)
++    // instead of one, for a "ding" timbre instead of a dry tick.
++    private func renderPerfectClick(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
++        if perfectClickRequestCount != perfectClickHandledCount {
++            perfectClickHandledCount = perfectClickRequestCount
++            perfectClickPhase = 0
++        }
++        guard perfectClickPhase >= 0 else { return }
++
++        let durationSamples = Int(MetronomeEngine.perfectClickDurationSeconds * sampleRate)
++        let remaining = durationSamples - perfectClickPhase
++        let toWrite = min(remaining, frameCount)
++        guard toWrite > 0 else {
++            perfectClickPhase = -1
++            return
++        }
++        ClickSynthesizer.renderRawSine(
++            into: buffer,
++            startFrame: 0,
++            clickPhase: perfectClickPhase,
++            count: toWrite,
++            sampleRate: sampleRate,
++            freq: MetronomeEngine.perfectClickFreq1Hz,
++            decayTau: MetronomeEngine.perfectClickDecayTau,
++            volume: MetronomeEngine.perfectClickVolume
++        )
++        ClickSynthesizer.renderRawSine(
++            into: buffer,
++            startFrame: 0,
++            clickPhase: perfectClickPhase,
++            count: toWrite,
++            sampleRate: sampleRate,
++            freq: MetronomeEngine.perfectClickFreq2Hz,
++            decayTau: MetronomeEngine.perfectClickDecayTau,
++            volume: MetronomeEngine.perfectClickVolume
++        )
++        perfectClickPhase += toWrite
++        if perfectClickPhase >= durationSamples { perfectClickPhase = -1 }
++    }
++
      private func renderCallback(
          frameCount: Int,
          audioBufferList: UnsafeMutablePointer<AudioBufferList>
-@@ -162,6 +271,7 @@ final class MetronomeEngine {
+@@ -162,6 +340,8 @@ final class MetronomeEngine {
          let bufferStart = currentSample
  
          renderOngoingClick(into: buffer, frameCount: frameCount)
 +        renderTapClick(into: buffer, frameCount: frameCount)
++        renderPerfectClick(into: buffer, frameCount: frameCount)
  
          if let (offset, beatNumber) = scheduler.nextBeat(
              frameCount: frameCount,
-@@ -199,23 +309,41 @@ final class MetronomeEngine {
+@@ -199,23 +379,41 @@ final class MetronomeEngine {
          return noErr
      }
  
@@ -345,7 +431,7 @@ index 84cec22..35cf951 100644
      }
  
      @objc private func handleInterruption(_ notification: Notification) {
-@@ -229,7 +357,15 @@ final class MetronomeEngine {
+@@ -229,7 +427,15 @@ final class MetronomeEngine {
          stop(reason: "interruption")
      }
  

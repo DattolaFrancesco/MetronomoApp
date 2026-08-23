@@ -445,6 +445,29 @@ export function classifyOnset(
   return deltaMs < 0 ? "early" : "late";
 }
 
+// Tap mode only (see components/tap-recorder.tsx's playPerfectClick) — a
+// stricter subset of "onTime" that triggers a bonus reward sound on top of
+// the usual visual feedback, for a hit that lands almost exactly on the
+// beat. Both a fixed cap and a fraction of whatever tolerance is actually
+// in effect: the fraction alone would let a very loose tolerance make
+// "perfect" meaninglessly wide, and the fixed cap alone would let a very
+// tight tolerance (the slider goes down to 10ms) make "perfect" wider
+// than — or equal to — "onTime" itself, which defeats the point of it
+// being a stricter subset. Whichever of the two is smaller wins.
+export const PERFECT_ALIGNMENT_MS = 18;
+export const PERFECT_ALIGNMENT_RATIO = 0.3;
+
+export function isPerfectAlignment(
+  deltaMs: number,
+  toleranceMs: number,
+): boolean {
+  const perfectMs = Math.min(
+    PERFECT_ALIGNMENT_MS,
+    toleranceMs * PERFECT_ALIGNMENT_RATIO,
+  );
+  return Math.abs(deltaMs) <= perfectMs;
+}
+
 // ---- Click gating ----
 
 // True while sampleTime still falls inside the metronome-click exclusion
