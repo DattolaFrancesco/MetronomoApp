@@ -6,6 +6,7 @@ import {
   type SessionSummary,
   type Subdivision,
 } from "@/components/sync-recorder";
+import { useTranslation } from "@/lib/i18n";
 import { Text, View } from "react-native";
 
 // Dev/QA-only companion to DebugChart: one row per expected hit (matched or
@@ -17,12 +18,6 @@ import { Text, View } from "react-native";
 const OK_COLOR = "#FFFFFF";
 const MISS_COLOR = "#FF3B30";
 const DIM_COLOR = "rgba(255,255,255,0.35)";
-
-const STATUS_LABEL: Record<string, string> = {
-  onTime: "ON TIME",
-  early: "EARLY",
-  late: "LATE",
-};
 
 // Same beat-subdivision labeling convention used by session-report's event
 // chips (plain number for quarters, "-5" for the eighth's levare, "beat-sub"
@@ -46,16 +41,17 @@ type DebugHitTableProps = {
 };
 
 export default function DebugHitTable({ summary }: DebugHitTableProps) {
+  const { t } = useTranslation();
   const beatIntervalMs = 60000 / summary.bpm;
   const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
 
   return (
     <View className="gap-2">
       <Text className="text-neutral-600 text-[10px] leading-4">
-        For each quarter: outcome, the strongest peak found in the listening
-        window, and how much it rose from the preceding minimum — compared
-        against the minimum thresholds (amplitude {MIN_PEAK_AMPLITUDE.toFixed(2)}, rise{" "}
-        {MIN_ONSET_RISE.toFixed(2)}).
+        {t("debugHitTable.description", {
+          amplitude: MIN_PEAK_AMPLITUDE.toFixed(2),
+          rise: MIN_ONSET_RISE.toFixed(2),
+        })}
       </Text>
 
       <View className="gap-1.5">
@@ -72,7 +68,7 @@ export default function DebugHitTable({ summary }: DebugHitTableProps) {
             <View key={`${hit.beatIndex}-${hit.subBeatIndex}-${i}`}>
               {showBarHeader && (
                 <Text className="text-white text-[10px] font-bold uppercase tracking-widest mt-1 mb-0.5">
-                  Bar {barNumber}
+                  {t("debugHitTable.barLabel", { n: barNumber })}
                 </Text>
               )}
               <View
@@ -97,19 +93,19 @@ export default function DebugHitTable({ summary }: DebugHitTableProps) {
                   style={{ color: hit.matched ? OK_COLOR : MISS_COLOR }}
                 >
                   {hit.matched
-                    ? `${STATUS_LABEL[hit.status!]} (${hit.deltaMs! > 0 ? "+" : ""}${Math.round(hit.deltaMs!)}ms)`
-                    : "NOT DETECTED"}
+                    ? `${t(`common.status.${hit.status!}`)} (${hit.deltaMs! > 0 ? "+" : ""}${Math.round(hit.deltaMs!)}ms)`
+                    : t("debugHitTable.notDetected")}
                 </Text>
 
                 <Text className="text-[10px]" style={{ color: DIM_COLOR }}>
-                  peak{" "}
+                  {t("debugHitTable.peak")}{" "}
                   <Text style={{ color: hit.passedAmplitude ? OK_COLOR : MISS_COLOR }}>
                     {fmtAmp(hit.candidateAmplitude)}
                   </Text>
                 </Text>
 
                 <Text className="text-[10px]" style={{ color: DIM_COLOR }}>
-                  rise{" "}
+                  {t("debugHitTable.rise")}{" "}
                   <Text style={{ color: hit.passedRise ? OK_COLOR : MISS_COLOR }}>
                     {fmtAmp(hit.candidateRise)}
                   </Text>

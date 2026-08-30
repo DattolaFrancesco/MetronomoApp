@@ -22,6 +22,7 @@ import {
   type ChallengeId,
   type ChallengeResult,
 } from "@/lib/challenges";
+import { useTranslation, type TranslationKey } from "@/lib/i18n";
 import {
   getHasSeenChallengeTour,
   markChallengeTourSeen,
@@ -45,33 +46,38 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 // Tour 2 — see lib/onboarding.ts's getHasSeenChallengeTour. A single
 // startTour() call (unlike Tour 1, every one of these targets lives on the
 // same screen already), fired once from ChallengeList's own mount effect.
-const CHALLENGE_TOUR_STEPS: TourStep[] = [
-  {
-    id: "challenge-list",
-    targetId: "challenge-list",
-    title: "Challenges",
-    description: "Ordered easiest to hardest, top to bottom.",
-    delayBefore: 300,
-  },
-  {
-    id: "challenge-difficulty-badge",
-    targetId: "challenge-difficulty-badge",
-    title: "Difficulty",
-    description: "Easy, Medium, Hard, Expert — harder tiers ask for more (or trickier) subdivisions and a tighter timing tolerance.",
-  },
-  {
-    id: "challenge-card-first",
-    targetId: "challenge-card-first",
-    title: "A challenge",
-    description: "Tap any card to see its details and start it.",
-  },
-  {
-    id: "challenge-tolerance",
-    targetId: "challenge-tolerance",
-    title: "Tolerance",
-    description: "How close to the beat every hit needs to land to pass — tighter on harder challenges.",
-  },
-];
+// A function (not a module constant) since the step titles/descriptions
+// need a live t() closure — same reasoning as app/index.tsx's
+// buildMainTourSteps.
+function buildChallengeTourSteps(t: (key: TranslationKey) => string): TourStep[] {
+  return [
+    {
+      id: "challenge-list",
+      targetId: "challenge-list",
+      title: t("challengeTour.list.title"),
+      description: t("challengeTour.list.description"),
+      delayBefore: 300,
+    },
+    {
+      id: "challenge-difficulty-badge",
+      targetId: "challenge-difficulty-badge",
+      title: t("challengeTour.difficultyBadge.title"),
+      description: t("challengeTour.difficultyBadge.description"),
+    },
+    {
+      id: "challenge-card-first",
+      targetId: "challenge-card-first",
+      title: t("challengeTour.cardFirst.title"),
+      description: t("challengeTour.cardFirst.description"),
+    },
+    {
+      id: "challenge-tolerance",
+      targetId: "challenge-tolerance",
+      title: t("challengeTour.tolerance.title"),
+      description: t("challengeTour.tolerance.description"),
+    },
+  ];
+}
 
 // Self-contained sibling to the free-session flow in app/index.tsx — its
 // own local list/session/report state machine, mounted/unmounted as a
@@ -91,12 +97,6 @@ const COUNT_IN_BEATS = 4;
 
 type Phase = "idle" | "countIn" | "recording";
 
-const DIFFICULTY_LABEL: Record<ChallengeDifficulty, string> = {
-  facile: "Easy",
-  medio: "Medium",
-  difficile: "Hard",
-  expert: "Expert",
-};
 const DIFFICULTY_COLOR: Record<ChallengeDifficulty, string> = {
   facile: SUCCESS_COLOR,
   medio: "#FF9F0A",
@@ -105,6 +105,7 @@ const DIFFICULTY_COLOR: Record<ChallengeDifficulty, string> = {
 };
 
 function DifficultyBadge({ difficulty }: { difficulty: ChallengeDifficulty }) {
+  const { t } = useTranslation();
   const color = DIFFICULTY_COLOR[difficulty];
   return (
     <View
@@ -115,7 +116,7 @@ function DifficultyBadge({ difficulty }: { difficulty: ChallengeDifficulty }) {
         className="text-[10px] font-bold uppercase tracking-wider"
         style={{ color }}
       >
-        {DIFFICULTY_LABEL[difficulty]}
+        {t(`challengeScreen.difficulty.${difficulty}`)}
       </Text>
     </View>
   );
@@ -196,6 +197,8 @@ function ChallengeCard({
   onSelect: () => void;
   isFirst: boolean;
 }) {
+  const { t } = useTranslation();
+  const toleranceText = t("challengeScreen.toleranceLabel", { ms: challenge.toleranceMs });
   const card = (
     <Pressable onPress={onSelect} className="active:opacity-70">
       <DarkPanel className="px-4 py-4 gap-2">
@@ -203,7 +206,7 @@ function ChallengeCard({
           <View className="flex-row items-center gap-2 flex-1 pr-2">
             {completed && <Text style={{ color: SUCCESS_COLOR }}>✓</Text>}
             <Text className="text-white text-base font-bold flex-shrink">
-              {challenge.name}
+              {t(`challenges.${challenge.id}.name`)}
             </Text>
           </View>
           {isFirst ? (
@@ -215,7 +218,7 @@ function ChallengeCard({
           )}
         </View>
         <Text className="text-neutral-500 text-xs leading-4">
-          {challenge.description}
+          {t(`challenges.${challenge.id}.description`)}
         </Text>
         {isFirst ? (
           <TourTarget id="challenge-tolerance">
@@ -223,7 +226,7 @@ function ChallengeCard({
               className="text-[10px] font-bold uppercase tracking-wider"
               style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
             >
-              ±{challenge.toleranceMs}ms tolerance
+              {toleranceText}
             </Text>
           </TourTarget>
         ) : (
@@ -231,7 +234,7 @@ function ChallengeCard({
             className="text-[10px] font-bold uppercase tracking-wider"
             style={{ color: DIFFICULTY_COLOR[challenge.difficulty] }}
           >
-            ±{challenge.toleranceMs}ms tolerance
+            {toleranceText}
           </Text>
         )}
       </DarkPanel>
@@ -261,21 +264,26 @@ function ChallengeList({
   const allComplete = CHALLENGES.every((c) => completedIds.has(c.id));
 
   const { startTour } = useTourGuide();
+  const { t } = useTranslation();
 
   // Fires once, the very first time this list is shown — independent of
   // Tour 1's own persistence (see lib/onboarding.ts), so it's the actual
   // first Challenge-section visit that matters, not whether Tour 1 has
   // run. Also how the settings menu's "Replay Challenge tutorial" shows it
   // again — it just resets this same flag and navigates here (see
-  // app/index.tsx's replayChallengeTour).
+  // app/index.tsx's handleReplayChallengeTour).
   useEffect(() => {
     let cancelled = false;
     getHasSeenChallengeTour().then((seen) => {
       if (cancelled || seen) return;
-      startTour(CHALLENGE_TOUR_STEPS, {
+      startTour(buildChallengeTourSteps(t), {
         ...tourTheme,
         tourId: "challengeTour",
         showProgressDots: true,
+        nextButtonText: t("tourButtons.next"),
+        prevButtonText: t("tourButtons.back"),
+        skipButtonText: t("tourButtons.skip"),
+        doneButtonText: t("tourButtons.done"),
         onTourEnd: () => {
           markChallengeTourSeen();
         },
@@ -322,7 +330,7 @@ function ChallengeList({
           className="text-center text-lg font-extrabold uppercase tracking-[3px]"
           style={{ color: ACCENT_COLOR }}
         >
-          Challenge
+          {t("challengeScreen.title")}
         </Text>
 
         {allComplete && (
@@ -334,14 +342,14 @@ function ChallengeList({
               <View className="flex-row items-center gap-2.5">
                 <Text style={{ fontSize: 18 }}>🏆</Text>
                 <Text className="text-white text-sm font-bold">
-                  You're a Timing Master
+                  {t("challengeScreen.masteryBanner")}
                 </Text>
               </View>
               <Text
                 className="text-xs font-bold uppercase tracking-wider"
                 style={{ color: ACCENT_COLOR }}
               >
-                View
+                {t("challengeScreen.view")}
               </Text>
             </DarkPanel>
           </Pressable>
@@ -377,6 +385,7 @@ function ChallengeSession({
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   const [bpm, setBpm] = useState(90);
   const [phase, setPhase] = useState<Phase>("idle");
   const [countInBeat, setCountInBeat] = useState<number | null>(null);
@@ -676,7 +685,7 @@ function ChallengeSession({
                   textShadowOffset: { width: 0, height: 0 },
                 }}
               >
-                {phase !== "idle" ? "Stop" : "Start"}
+                {phase !== "idle" ? t("common.stop") : t("common.start")}
               </Text>
             </Pressable>
           </>
@@ -702,6 +711,7 @@ function ChallengeReport({
   onExit: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   const color = result.passed ? SUCCESS_COLOR : FAIL_COLOR;
   const onTimeCount = result.hits.filter((h) => h.onTime).length;
 
@@ -744,15 +754,17 @@ function ChallengeReport({
             className="text-4xl font-bold text-center"
             style={{ color }}
           >
-            {result.passed ? "You crushed it!" : "Not quite!"}
+            {result.passed
+              ? t("challengeScreen.report.passedTitle")
+              : t("challengeScreen.report.failedTitle")}
           </Text>
           <Text className="text-white/60 text-sm text-center">
             {result.passed
-              ? `All ${result.hits.length} hits were on time.`
-              : "Not all hits were on time — try again!"}
+              ? t("challengeScreen.report.passedSubtitle", { count: result.hits.length })
+              : t("challengeScreen.report.failedSubtitle")}
           </Text>
           <Text className="text-white/40 text-xs font-semibold mt-1">
-            {onTimeCount} of {result.hits.length} on time
+            {t("challengeScreen.report.onTimeCount", { onTime: onTimeCount, total: result.hits.length })}
           </Text>
         </DarkPanel>
 
@@ -778,7 +790,7 @@ function ChallengeReport({
                   style={{ color: hit.onTime ? SUCCESS_COLOR : FAIL_COLOR }}
                 >
                   {hit.deltaMs === null
-                    ? "missed"
+                    ? t("challengeScreen.report.missed")
                     : `${hit.deltaMs > 0 ? "+" : ""}${Math.round(hit.deltaMs)}ms`}
                 </Text>
                 <Text
@@ -797,12 +809,12 @@ function ChallengeReport({
             className="text-[11px] font-bold uppercase tracking-[2px]"
             style={{ color: ACCENT_COLOR }}
           >
-            Timing Analysis
+            {t("common.timingAnalysis")}
           </Text>
           {result.debugGroups.map((group, i) => (
             <View key={`${group.label}-${group.barIndex}-${i}`} className="gap-2">
               <Text className="text-white text-[10px] font-bold uppercase tracking-widest">
-                Bar {group.barIndex + 1} — {group.label}
+                {t("challengeScreen.report.barLabel", { n: group.barIndex + 1, label: group.label })}
               </Text>
               <DebugChart
                 summary={group.summary}
@@ -833,7 +845,7 @@ function ChallengeReport({
               textShadowOffset: { width: 0, height: 0 },
             }}
           >
-            {result.passed ? "Go back" : "Retry"}
+            {result.passed ? t("common.goBack") : t("common.retry")}
           </Text>
         </Pressable>
       </ScrollView>

@@ -4,6 +4,7 @@ import DarkPanel from "@/components/dark-panel";
 import MicPermissionGate from "@/components/mic-permission-gate";
 import SessionReport from "@/components/session-report";
 import SessionSetup, { GlowDivider } from "@/components/session-setup";
+import SettingsScreen from "@/components/settings-screen";
 import SyncRecorder, {
   type OnsetStatus,
   type SessionSummary,
@@ -15,9 +16,15 @@ import TapRecorder from "@/components/tap-recorder";
 import TempoRuler, { APP_BPM_MAX } from "@/components/tempo-ruler";
 import WiredHeadphonesNotice from "@/components/wired-headphones-notice";
 import { buildTourPreviewReport } from "@/lib/fake-report";
-import { getHasSeenMainTour, markMainTourSeen } from "@/lib/onboarding";
+import { useTranslation, type TranslationKey } from "@/lib/i18n";
+import {
+  getHasSeenMainTour,
+  markMainTourSeen,
+  resetChallengeTourSeen,
+} from "@/lib/onboarding";
 import type { InputSource } from "@/lib/rhythm-detection";
 import { tourTheme } from "@/lib/tour-theme";
+import { Ionicons } from "@expo/vector-icons";
 import { TourTarget, useTourGuide, type TourStep } from "@wrack/react-native-tour-guide";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
@@ -39,26 +46,19 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 const ACCENT_COLOR = "#FF3B30";
 const COUNT_IN_BEATS = 4;
 
-// Single-word subdivision label for the recording screen's header — kept
-// separate from the setup screen's Tempo carousel (see
-// components/session-setup.tsx's TEMPO_OPTIONS), which uses its own labels.
-const SUBDIVISION_LABELS: Record<Subdivision, string> = {
-  quarter: "Quarters",
-  eighth: "Eighths",
-  triplet: "Triplets",
-  sixteenth: "Sixteenths",
-};
-
 type Phase = "idle" | "countIn" | "recording";
 
 const TOLERANCE_MIN_MS = 10;
 const TOLERANCE_MAX_MS = 120;
 const DEFAULT_TOLERANCE_MS = 100;
 
-const STATUS_META: Record<OnsetStatus, { label: string; color: string }> = {
-  onTime: { label: "ON TIME", color: "#39FF6A" },
-  early: { label: "EARLY", color: "#FF9F0A" },
-  late: { label: "LATE", color: "#FF453A" },
+// Color-only now — the label text itself comes from t("common.status...")
+// at render time (see STATUS_COLOR's callers below), since a module-level
+// const can't hold a live translation.
+const STATUS_COLOR: Record<OnsetStatus, string> = {
+  onTime: "#39FF6A",
+  early: "#FF9F0A",
+  late: "#FF453A",
 };
 const IDLE_COLOR = ACCENT_COLOR;
 
@@ -86,6 +86,7 @@ function waitForNextFrame(): Promise<void> {
 // constant) because the before() hooks need to close over Home's own state
 // setters.
 function buildMainTourSteps(
+  t: (key: TranslationKey) => string,
   showSessionPreview: () => Promise<void>,
   showReportPreview: () => Promise<void>,
 ): TourStep[] {
@@ -93,61 +94,61 @@ function buildMainTourSteps(
     {
       id: "setup-bars",
       targetId: "setup-bars",
-      title: "Bars",
-      description: "How many bars the session lasts — the metronome stops itself once they're done.",
+      title: t("mainTour.setupBars.title"),
+      description: t("mainTour.setupBars.description"),
       delayBefore: 300,
     },
     {
       id: "setup-subdivision",
       targetId: "setup-subdivision",
-      title: "Subdivision",
-      description: "Which rhythmic subdivision to practice against — quarters, eighths, triplets, or sixteenths.",
+      title: t("mainTour.setupSubdivision.title"),
+      description: t("mainTour.setupSubdivision.description"),
     },
     {
       id: "setup-inputmode",
       targetId: "setup-inputmode",
-      title: "Microphone or Tap",
-      description: "Microphone listens for real hits through your mic. Tap lets you practice by pressing a button instead — no mic needed.",
+      title: t("mainTour.setupInputMode.title"),
+      description: t("mainTour.setupInputMode.description"),
     },
     {
       id: "setup-start",
       targetId: "setup-start",
-      title: "Start",
-      description: "Starts the metronome with a short count-in, then begins tracking your timing.",
+      title: t("mainTour.setupStart.title"),
+      description: t("mainTour.setupStart.description"),
     },
     {
       id: "session-beatindicator",
       targetId: "session-beatindicator",
-      title: "Beat indicator",
-      description: "These dots pulse in real time with the metronome's beat, so you can follow the tempo visually too.",
+      title: t("mainTour.sessionBeatIndicator.title"),
+      description: t("mainTour.sessionBeatIndicator.description"),
       before: showSessionPreview,
       delayBefore: 250,
     },
     {
       id: "session-stop",
       targetId: "session-stop",
-      title: "Stop",
-      description: "Stops the session at any time — you don't have to wait for it to finish on its own.",
+      title: t("mainTour.sessionStop.title"),
+      description: t("mainTour.sessionStop.description"),
     },
     {
       id: "report-result",
       targetId: "report-result",
-      title: "Result",
-      description: "The headline number for the session — the percentage of hits that landed on time.",
+      title: t("mainTour.reportResult.title"),
+      description: t("mainTour.reportResult.description"),
       before: showReportPreview,
       delayBefore: 250,
     },
     {
       id: "report-status",
       targetId: "report-status",
-      title: "Early, on time, late",
-      description: "The same result broken down by how each hit missed, when it did — early, on time, or late.",
+      title: t("mainTour.reportStatus.title"),
+      description: t("mainTour.reportStatus.description"),
     },
     {
       id: "report-debugchart",
       targetId: "report-debugchart",
-      title: "Timing Analysis",
-      description: "The full waveform against the beat grid — the red line marks exactly where each hit landed.",
+      title: t("mainTour.reportDebugChart.title"),
+      description: t("mainTour.reportDebugChart.description"),
     },
   ];
 }
@@ -181,6 +182,7 @@ function ToleranceSlider({
   toleranceMs: number;
   onChange: (ms: number) => void;
 }) {
+  const { t } = useTranslation();
   const [trackWidth, setTrackWidth] = useState(0);
   const THUMB_SIZE = 22;
 
@@ -215,7 +217,7 @@ function ToleranceSlider({
     <DarkPanel className="px-5 py-5 gap-4">
       <View className="flex-row items-center justify-between">
         <Text className="text-neutral-500 text-[11px] font-bold uppercase tracking-[2px]">
-          Tolerance
+          {t("home.tolerance")}
         </Text>
         <Text className="text-white text-sm font-extrabold">{toleranceMs}ms</Text>
       </View>
@@ -329,6 +331,9 @@ export default function Home() {
   // see components/challenge-screen.tsx, which owns its own list/session/
   // report state once mounted and never touches any of Home's own state.
   const [showChallenges, setShowChallenges] = useState(false);
+  // The settings screen, opened from the gear button on the setup screen —
+  // see the render branch below and the two replay handlers.
+  const [showSettings, setShowSettings] = useState(false);
   // True only while the main tour's session-preview steps are showing (see
   // buildMainTourSteps' showSessionPreview) — lets the recording screen's
   // BeatIndicator/Stop button display as if a session were running
@@ -378,6 +383,7 @@ export default function Home() {
   useKeepAwake();
 
   const { startTour } = useTourGuide();
+  const { t } = useTranslation();
 
   // Cleanup for the main tour's simulated session/report screens — called
   // from runMainTour's own onTourEnd regardless of whether the tour
@@ -415,10 +421,14 @@ export default function Home() {
   };
 
   const runMainTour = () => {
-    startTour(buildMainTourSteps(showMainTourSessionPreview, showMainTourReportPreview), {
+    startTour(buildMainTourSteps(t, showMainTourSessionPreview, showMainTourReportPreview), {
       ...tourTheme,
       tourId: "mainTour",
       showProgressDots: true,
+      nextButtonText: t("tourButtons.next"),
+      prevButtonText: t("tourButtons.back"),
+      skipButtonText: t("tourButtons.skip"),
+      doneButtonText: t("tourButtons.done"),
       // Chains straight into the Challenge tour either way — completed or
       // skipped. Just navigating to Challenges is enough: ChallengeScreen's
       // own mount effect (see components/challenge-screen.tsx) already
@@ -432,6 +442,25 @@ export default function Home() {
         setShowChallenges(true);
       },
     });
+  };
+
+  // Settings screen's "Replay main tutorial" — just re-runs the same tour
+  // shown on first launch, same delayBefore: 300 on its first step already
+  // covering the setup screen's own remount timing (see runMainTour above).
+  const handleReplayMainTour = () => {
+    setShowSettings(false);
+    runMainTour();
+  };
+
+  // Settings screen's "Replay challenge tutorial" — resets the Challenge
+  // tour's own "seen" flag and navigates to it, letting ChallengeList's
+  // mount effect (components/challenge-screen.tsx) auto-fire the tour again
+  // exactly as if this were the first-ever visit, instead of calling
+  // startTour from here directly.
+  const handleReplayChallengeTour = async () => {
+    await resetChallengeTourSeen();
+    setShowSettings(false);
+    setShowChallenges(true);
   };
 
   // Fires once, the very first time the setup screen is actually visible.
@@ -584,6 +613,16 @@ export default function Home() {
     );
   }
 
+  if (showSettings) {
+    return (
+      <SettingsScreen
+        onBack={() => setShowSettings(false)}
+        onReplayMainTour={handleReplayMainTour}
+        onReplayChallengeTour={handleReplayChallengeTour}
+      />
+    );
+  }
+
   if (showChallenges) {
     return (
       <ChallengeScreen
@@ -622,6 +661,28 @@ export default function Home() {
           paddingBottom: insets.bottom + 24,
         }}
       >
+        {/* Visible regardless of mic-permission state (a sibling of the
+            ternary below, not inside either branch) — settings access
+            shouldn't depend on having granted the mic yet. Absolute
+            positioning ignores the LinearGradient's own paddingTop, so top
+            is computed from insets directly here (same as the back buttons
+            in challenge-screen.tsx) instead of relying on top: 0. */}
+        <Pressable
+          onPress={() => setShowSettings(true)}
+          className="w-10 h-10 rounded-full items-center justify-center active:opacity-60"
+          style={{
+            position: "absolute",
+            top: insets.top + 16,
+            left: 20,
+            zIndex: 10,
+            backgroundColor: "rgba(255,255,255,0.06)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.12)",
+          }}
+        >
+          <Ionicons name="settings-outline" size={20} color="#FFFFFF" />
+        </Pressable>
+
         {inputMode === "tap" || micGranted ? (
           <SessionSetup
             bars={setupBars}
@@ -644,13 +705,12 @@ export default function Home() {
   }
 
   const isCountIn = phase === "countIn";
-  const statusMeta = syncStatus ? STATUS_META[syncStatus] : null;
-  const label = statusMeta
-    ? statusMeta.label
+  const label = syncStatus
+    ? t(`common.status.${syncStatus}`)
     : phase === "recording"
-      ? "LISTENING"
-      : "READY";
-  const color = statusMeta ? statusMeta.color : IDLE_COLOR;
+      ? t("home.listening")
+      : t("home.ready");
+  const color = syncStatus ? STATUS_COLOR[syncStatus] : IDLE_COLOR;
 
   return (
     <LinearGradient
@@ -684,7 +744,7 @@ export default function Home() {
             className="text-center text-lg font-extrabold uppercase tracking-[3px]"
             style={{ color: ACCENT_COLOR }}
           >
-            {SUBDIVISION_LABELS[setupSubdivision]}
+            {t(`common.subdivision.${setupSubdivision}`)}
           </Text>
         </View>
 
@@ -720,7 +780,7 @@ export default function Home() {
             screen). See TargetPicker. */}
         {setupSubdivision === "triplet" && phase === "idle" && (
           <TargetPicker
-            label="Note to evaluate"
+            label={t("home.noteToEvaluate")}
             options={[2, 3] as const}
             value={tripletTarget}
             onChange={setTripletTarget}
@@ -728,7 +788,7 @@ export default function Home() {
         )}
         {setupSubdivision === "sixteenth" && phase === "idle" && (
           <TargetPicker
-            label="Note to evaluate"
+            label={t("home.noteToEvaluate")}
             options={[2, 3, 4] as const}
             value={sixteenthTarget}
             onChange={setSixteenthTarget}
@@ -857,7 +917,7 @@ export default function Home() {
                     textShadowOffset: { width: 0, height: 0 },
                   }}
                 >
-                  {phase !== "idle" || isTourSessionPreview ? "Stop" : "Start"}
+                  {phase !== "idle" || isTourSessionPreview ? t("common.stop") : t("common.start")}
                 </Text>
               </Pressable>
             </TourTarget>

@@ -1,5 +1,6 @@
 import NoteGlyph from "@/components/note-glyph";
 import type { Subdivision } from "@/components/sync-recorder";
+import { useTranslation } from "@/lib/i18n";
 import type { InputSource } from "@/lib/rhythm-detection";
 import { TourTarget } from "@wrack/react-native-tour-guide";
 import { LinearGradient } from "expo-linear-gradient";
@@ -211,6 +212,7 @@ export default function SessionSetup({
   inputMode,
   onInputModeChange,
 }: SessionSetupProps) {
+  const { t } = useTranslation();
   const barsIndex = Math.max(0, BARS_OPTIONS.indexOf(bars as (typeof BARS_OPTIONS)[number]));
   const subdivisionIndex = Math.max(
     0,
@@ -247,7 +249,7 @@ export default function SessionSetup({
               className="text-xs font-bold uppercase tracking-widest"
               style={{ color: ACCENT_COLOR }}
             >
-              Training
+              {t("setup.trainingTab")}
             </Text>
           </View>
           <Pressable
@@ -259,7 +261,7 @@ export default function SessionSetup({
             }}
           >
             <Text className="text-xs font-bold uppercase tracking-widest text-neutral-400">
-              Challenge
+              {t("setup.challengeTab")}
             </Text>
           </Pressable>
         </View>
@@ -283,7 +285,7 @@ export default function SessionSetup({
                   color: inputMode === "microphone" ? ACCENT_COLOR : "#8E8E93",
                 }}
               >
-                Microphone
+                {t("setup.microphone")}
               </Text>
             </Pressable>
             <Pressable
@@ -299,7 +301,7 @@ export default function SessionSetup({
                 className="text-[11px] font-bold uppercase tracking-widest"
                 style={{ color: inputMode === "tap" ? ACCENT_COLOR : "#8E8E93" }}
               >
-                Tap
+                {t("setup.tap")}
               </Text>
             </Pressable>
           </View>
@@ -313,7 +315,7 @@ export default function SessionSetup({
               className="text-[11px] font-bold uppercase tracking-[3px]"
               style={{ color: ACCENT_COLOR }}
             >
-              Bars
+              {t("setup.bars")}
             </Text>
             <Carousel
               items={BARS_OPTIONS}
@@ -350,7 +352,7 @@ export default function SessionSetup({
               className="text-[11px] font-bold uppercase tracking-[3px]"
               style={{ color: ACCENT_COLOR }}
             >
-              Tempo
+              {t("setup.tempo")}
             </Text>
             <Carousel
               items={TEMPO_OPTIONS}
@@ -404,7 +406,7 @@ export default function SessionSetup({
               textShadowOffset: { width: 0, height: 0 },
             }}
           >
-            Start
+            {t("setup.start")}
           </Text>
         </Pressable>
       </TourTarget>

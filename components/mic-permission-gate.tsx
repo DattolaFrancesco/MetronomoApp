@@ -1,4 +1,5 @@
 import LoadingScreen from "@/components/loading-screen";
+import { useTranslation } from "@/lib/i18n";
 import {
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
@@ -23,6 +24,7 @@ type Props = {
 // away — the message below only becomes visible if that prompt is denied
 // or was already denied in a previous session.
 export default function MicPermissionGate({ onGranted, onUseTapInstead }: Props) {
+  const { t } = useTranslation();
   const [checking, setChecking] = useState(true);
   const [canAskAgain, setCanAskAgain] = useState(true);
 
@@ -67,11 +69,10 @@ export default function MicPermissionGate({ onGranted, onUseTapInstead }: Props)
   return (
     <View className="flex-1 items-center justify-center gap-6 px-2">
       <Text className="text-white text-lg font-extrabold tracking-widest text-center">
-        Microphone access required
+        {t("micPermissionGate.title")}
       </Text>
       <Text className="text-white/60 text-center leading-5">
-        Timing compares your timing against the metronome using the
-        microphone. You need to grant access to continue.
+        {t("micPermissionGate.body")}
       </Text>
       <Pressable
         onPress={handlePress}
@@ -93,14 +94,14 @@ export default function MicPermissionGate({ onGranted, onUseTapInstead }: Props)
             textShadowOffset: { width: 0, height: 0 },
           }}
         >
-          {canAskAgain ? "Allow access" : "Open settings"}
+          {canAskAgain ? t("micPermissionGate.allowAccess") : t("micPermissionGate.openSettings")}
         </Text>
       </Pressable>
 
       {onUseTapInstead && (
         <Pressable onPress={onUseTapInstead} className="active:opacity-60">
           <Text className="text-white/50 text-sm font-semibold underline">
-            Use Tap instead — no microphone needed
+            {t("micPermissionGate.useTapInstead")}
           </Text>
         </Pressable>
       )}

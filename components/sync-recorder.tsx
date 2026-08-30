@@ -1,4 +1,5 @@
 import DarkPanel from "@/components/dark-panel";
+import { useTranslation } from "@/lib/i18n";
 import {
   analyzeSession,
   BEATS_PER_BAR,
@@ -220,6 +221,7 @@ export default function SyncRecorder({
   onRecordingStart,
   onLimitReached,
 }: SyncRecorderProps) {
+  const { t } = useTranslation();
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
     isMeteringEnabled: true,
@@ -867,7 +869,7 @@ export default function SyncRecorder({
   return (
     <DarkPanel className="px-4 py-4 gap-3 w-full">
       <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-        Input audio
+        {t("syncRecorder.inputAudio")}
       </Text>
 
       {permissionDenied ? (
@@ -876,8 +878,7 @@ export default function SyncRecorder({
           className="items-center justify-center"
         >
           <Text className="text-white text-center text-sm px-4">
-            Microphone not authorized. Enable access in settings to see the
-            sync.
+            {t("syncRecorder.micNotAuthorized")}
           </Text>
         </View>
       ) : (
@@ -897,8 +898,7 @@ export default function SyncRecorder({
       )}
 
       <Text className="text-neutral-600 text-xs leading-4">
-        Tip: use headphones or earbuds for more precise detection — this
-        keeps the mic from also picking up the metronome's own click.
+        {t("syncRecorder.tip")}
       </Text>
     </DarkPanel>
   );

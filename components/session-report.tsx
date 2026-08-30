@@ -2,10 +2,10 @@ import DarkPanel from "@/components/dark-panel";
 import DebugChart from "@/components/debug-chart";
 import type {
   OnsetEvent,
-  OnsetStatus,
   SessionSummary,
   Subdivision,
 } from "@/components/sync-recorder";
+import { useTranslation } from "@/lib/i18n";
 import { TourTarget } from "@wrack/react-native-tour-guide";
 import { LinearGradient } from "expo-linear-gradient";
 import { Pressable, ScrollView, Text, View } from "react-native";
@@ -13,12 +13,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const ACCENT_COLOR = "#FF3B30";
 const DIM_COLOR = "rgba(255,255,255,0.35)";
-
-const STATUS_META: Record<OnsetStatus, { label: string }> = {
-  onTime: { label: "ON TIME" },
-  early: { label: "EARLY" },
-  late: { label: "LATE" },
-};
 
 // A zero count is de-emphasized (dim grey) regardless of category; a
 // nonzero count is white for onTime, red for early/late — early and late
@@ -97,6 +91,7 @@ type SessionReportProps = {
 
 export default function SessionReport({ summary, onNewSession }: SessionReportProps) {
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
 
   const sortedEvents = [...summary.events].sort(
     (a, b) => a.elapsedMs - b.elapsedMs,
@@ -145,19 +140,19 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
           className="text-center text-lg font-extrabold uppercase tracking-[3px]"
           style={{ color: ACCENT_COLOR }}
         >
-          Session report
+          {t("sessionReport.title")}
         </Text>
 
         <View style={{ height: 1, backgroundColor: "rgba(255,255,255,0.12)" }} />
 
         <DarkPanel className="px-4 py-5 gap-4 w-full items-center">
           <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-            Result
+            {t("sessionReport.result")}
           </Text>
 
           {total === 0 ? (
             <Text className="text-white/70 text-sm text-center px-4">
-              No hits detected in this session.
+              {t("sessionReport.noHits")}
             </Text>
           ) : (
             <>
@@ -175,7 +170,7 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
                     {accuracy}%
                   </Text>
                   <Text className="text-white/60 text-xs font-semibold">
-                    {onTimeCount} of {total} hits on time
+                    {t("sessionReport.onTimeCount", { onTime: onTimeCount, total })}
                   </Text>
                 </View>
               </TourTarget>
@@ -184,17 +179,17 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
                 <View className="flex-row justify-center gap-8 mt-1">
                   <StatCount
                     color={countColor(onTimeCount, true)}
-                    label={STATUS_META.onTime.label}
+                    label={t("common.status.onTime")}
                     count={onTimeCount}
                   />
                   <StatCount
                     color={countColor(earlyCount, false)}
-                    label={STATUS_META.early.label}
+                    label={t("common.status.early")}
                     count={earlyCount}
                   />
                   <StatCount
                     color={countColor(lateCount, false)}
-                    label={STATUS_META.late.label}
+                    label={t("common.status.late")}
                     count={lateCount}
                   />
                 </View>
@@ -215,7 +210,7 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
               className="text-[11px] font-bold uppercase tracking-[2px]"
               style={{ color: ACCENT_COLOR }}
             >
-              Timing Analysis
+              {t("common.timingAnalysis")}
             </Text>
             <DebugChart summary={summary} />
           </DarkPanel>
@@ -241,7 +236,7 @@ export default function SessionReport({ summary, onNewSession }: SessionReportPr
               textShadowOffset: { width: 0, height: 0 },
             }}
           >
-            New session
+            {t("sessionReport.newSession")}
           </Text>
         </Pressable>
       </ScrollView>

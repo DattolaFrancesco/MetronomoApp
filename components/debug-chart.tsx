@@ -5,6 +5,7 @@ import {
   WAVEFORM_SAMPLE_INTERVAL_MS,
   type SessionSummary,
 } from "@/components/sync-recorder";
+import { useTranslation } from "@/lib/i18n";
 import { Canvas, Path, Skia, type SkPath } from "@shopify/react-native-skia";
 import { useMemo, useState } from "react";
 import { Text, View } from "react-native";
@@ -105,6 +106,7 @@ export default function DebugChart({
   showDescription = true,
   showRowLabel = true,
 }: DebugChartProps) {
+  const { t } = useTranslation();
   const [width, setWidth] = useState(0);
   // "triplet" and "sixteenth" both evaluate every one of their sub-beats
   // (see evaluatedSubBeats in lib/rhythm-detection.ts) and get their own
@@ -320,38 +322,36 @@ export default function DebugChart({
       {showDescription && (
         <>
           <Text className="text-neutral-600 text-[10px] leading-4">
-            {summary.inputSource === "tap"
-              ? summary.subdivision === "triplet"
-                ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. Each line is a tap — green if on time, red if outside tolerance."
-                : summary.subdivision === "sixteenth"
-                  ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. Each line is a tap — green if on time, red if outside tolerance."
-                  : "The numbered white lines mark the quarters, the short dashes the sixteenths. Each line is a tap — green if on time, red if outside tolerance."
-              : summary.subdivision === "triplet"
-                ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the two triplet subdivisions. The solid red line is the peak detected by the microphone."
-                : summary.subdivision === "sixteenth"
-                  ? "The numbered white lines mark the quarters (the downbeat), the thinner lines the three inner sixteenths. The solid red line is the peak detected by the microphone."
-                  : "The numbered white lines mark the quarters, the short dashes the sixteenths. The solid red line is the peak detected by the microphone."}
+            {t(
+              `debugChart.description.${summary.inputSource === "tap" ? "tap" : "mic"}.${
+                summary.subdivision === "triplet"
+                  ? "triplet"
+                  : summary.subdivision === "sixteenth"
+                    ? "sixteenth"
+                    : "default"
+              }`,
+            )}
           </Text>
 
           <View className="flex-row flex-wrap gap-x-3 gap-y-1">
-            <LegendLine color={QUARTER_TICK_COLOR} label="quarter" />
+            <LegendLine color={QUARTER_TICK_COLOR} label={t("debugChart.legend.quarter")} />
             {hasSubdivisionGrid && (
               <LegendLine
                 color={SUBDIVISION_SECONDARY_TICK_COLOR}
                 label={
                   summary.subdivision === "triplet"
-                    ? "triplet subdivisions"
-                    : "inner sixteenths"
+                    ? t("debugChart.legend.tripletSubdivisions")
+                    : t("debugChart.legend.innerSixteenths")
                 }
               />
             )}
             {summary.inputSource === "tap" ? (
               <>
-                <LegendLine color={TAP_ONTIME_COLOR} label="on time" />
-                <LegendLine color={TAP_OFFTIME_COLOR} label="out of tolerance" />
+                <LegendLine color={TAP_ONTIME_COLOR} label={t("debugChart.legend.onTime")} />
+                <LegendLine color={TAP_OFFTIME_COLOR} label={t("debugChart.legend.outOfTolerance")} />
               </>
             ) : (
-              <LegendLine color={ONSET_LINE_COLOR} label="hit" />
+              <LegendLine color={ONSET_LINE_COLOR} label={t("debugChart.legend.hit")} />
             )}
           </View>
         </>
@@ -362,7 +362,7 @@ export default function DebugChart({
           <View key={row.barNumber} style={{ marginBottom: ROW_GAP }}>
             {showRowLabel && (
               <Text className="text-white text-[10px] font-bold uppercase tracking-widest mb-1">
-                Bar {row.barNumber}
+                {t("debugChart.barLabel", { n: row.barNumber })}
               </Text>
             )}
             <View style={{ width, height: CHART_TOTAL_HEIGHT }}>

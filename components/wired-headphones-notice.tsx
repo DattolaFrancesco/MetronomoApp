@@ -1,5 +1,6 @@
 import DarkPanel from "@/components/dark-panel";
 import LoadingScreen from "@/components/loading-screen";
+import { useTranslation } from "@/lib/i18n";
 import {
   getHasDismissedWiredHeadphonesNotice,
   markWiredHeadphonesNoticeDismissed,
@@ -22,6 +23,7 @@ type Props = {
 // per-session, easy-to-forget risk to the app's core measurement, not a
 // one-time thing to learn.
 export default function WiredHeadphonesNotice({ onDone }: Props) {
+  const { t } = useTranslation();
   const [checking, setChecking] = useState(true);
   const [dontShowAgain, setDontShowAgain] = useState(false);
 
@@ -60,15 +62,11 @@ export default function WiredHeadphonesNotice({ onDone }: Props) {
           className="text-center text-xl font-extrabold leading-6"
           style={{ color: ACCENT_COLOR }}
         >
-          For accurate results, use wired headphones
+          {t("wiredHeadphonesNotice.title")}
         </Text>
 
         <Text className="text-white/70 text-base text-center leading-6">
-          This app measures your timing down to the millisecond. Bluetooth
-          headphones add audio delay that throws off the measurement — even a
-          great pair can be off by 100ms or more. For precise results, use
-          wired headphones. This also keeps the mic from picking up the
-          metronome’s own click.
+          {t("wiredHeadphonesNotice.body")}
         </Text>
 
         <Pressable
@@ -96,7 +94,7 @@ export default function WiredHeadphonesNotice({ onDone }: Props) {
             )}
           </View>
           <Text className="text-white/60 text-sm font-semibold">
-            Don’t show this again
+            {t("wiredHeadphonesNotice.dontShowAgain")}
           </Text>
         </Pressable>
 
@@ -115,7 +113,7 @@ export default function WiredHeadphonesNotice({ onDone }: Props) {
             className="text-lg font-extrabold uppercase tracking-widest"
             style={{ color: ACCENT_COLOR }}
           >
-            Got it
+            {t("wiredHeadphonesNotice.gotIt")}
           </Text>
         </Pressable>
       </DarkPanel>

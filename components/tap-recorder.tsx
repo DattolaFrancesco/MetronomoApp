@@ -1,4 +1,5 @@
 import DarkPanel from "@/components/dark-panel";
+import { useTranslation } from "@/lib/i18n";
 import {
   analyzeTapSession,
   BEATS_PER_BAR,
@@ -105,6 +106,7 @@ export default function TapRecorder({
   onLimitReached,
   onRequestStart,
 }: TapRecorderProps) {
+  const { t } = useTranslation();
   const [tapCount, setTapCount] = useState(0);
   // The latency-compensation value actually in effect right now — see
   // FALLBACK_LATENCY_COMPENSATION_MS above and fetchLatencyCompensation
@@ -510,7 +512,7 @@ export default function TapRecorder({
   return (
     <DarkPanel className="px-4 py-4 gap-3 w-full" style={{ flex: 1 }}>
       <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-        Input tap
+        {t("tapRecorder.inputTap")}
       </Text>
 
       <AnimatedPressable
@@ -542,17 +544,15 @@ export default function TapRecorder({
         }}
       >
         <Text className="text-3xl font-extrabold uppercase tracking-widest text-white">
-          Tap
+          {t("tapRecorder.tap")}
         </Text>
         <Text className="text-white/50 text-sm font-semibold mt-2">
-          {tapCount} taps
+          {t("tapRecorder.tapsCount", { count: tapCount })}
         </Text>
       </AnimatedPressable>
 
       <Text className="text-neutral-600 text-xs leading-4">
-        {isArmed
-          ? "Tap the button in time with the metronome."
-          : "Tap the button to start — no microphone needed."}
+        {isArmed ? t("tapRecorder.hintArmed") : t("tapRecorder.hintIdle")}
       </Text>
     </DarkPanel>
   );

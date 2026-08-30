@@ -60,3 +60,11 @@ export async function getHasSeenChallengeTour(): Promise<boolean> {
 export async function markChallengeTourSeen(): Promise<void> {
   await AsyncStorage.setItem(CHALLENGE_TOUR_SEEN_KEY, "true");
 }
+
+// Used by the settings screen's "Replay challenge tutorial" — clears the
+// flag and lets ChallengeList's own mount effect (see
+// components/challenge-screen.tsx) auto-fire the tour again, exactly as if
+// this were the first-ever visit.
+export async function resetChallengeTourSeen(): Promise<void> {
+  await AsyncStorage.removeItem(CHALLENGE_TOUR_SEEN_KEY);
+}

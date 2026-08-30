@@ -1,3 +1,4 @@
+import { LanguageProvider } from "@/lib/i18n";
 import { TourGuideOverlay, TourGuideProvider } from "@wrack/react-native-tour-guide";
 import { Stack } from "expo-router";
 import {
@@ -17,22 +18,24 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-          {/* Both spotlight tours (see app/index.tsx and
-              components/challenge-screen.tsx) run through this single
-              provider/overlay pair — <TourGuideOverlay /> must be mounted
-              exactly once, after all real screen content, for either
-              tour's spotlight to actually render. */}
-          <TourGuideProvider>
-            <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="index" />
-            </Stack>
-            <TourGuideOverlay />
-            <StatusBar style="auto" />
-          </TourGuideProvider>
-        </ThemeProvider>
-      </SafeAreaProvider>
+      <LanguageProvider>
+        <SafeAreaProvider>
+          <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+            {/* Both spotlight tours (see app/index.tsx and
+                components/challenge-screen.tsx) run through this single
+                provider/overlay pair — <TourGuideOverlay /> must be mounted
+                exactly once, after all real screen content, for either
+                tour's spotlight to actually render. */}
+            <TourGuideProvider>
+              <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="index" />
+              </Stack>
+              <TourGuideOverlay />
+              <StatusBar style="auto" />
+            </TourGuideProvider>
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </LanguageProvider>
     </GestureHandlerRootView>
   );
 }
