@@ -154,6 +154,7 @@ export const it: typeof en = {
   },
   tapRecorder: {
     inputTap: "Tocco in ingresso",
+    soundToggle: "Suono",
     tap: "Tocca",
     tapsCount: "{{count}} tocchi",
     hintArmed: "Tocca il pulsante a tempo con il metronomo.",

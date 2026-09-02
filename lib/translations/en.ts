@@ -154,6 +154,7 @@ export const en = {
   },
   tapRecorder: {
     inputTap: "Input tap",
+    soundToggle: "Sound",
     tap: "Tap",
     tapsCount: "{{count}} taps",
     hintArmed: "Tap the button in time with the metronome.",

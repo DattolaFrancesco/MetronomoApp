@@ -15,11 +15,12 @@ import {
   type Subdivision,
   type TripletTarget,
 } from "@/lib/rhythm-detection";
+import { getTapSoundEnabled, setTapSoundEnabled } from "@/lib/tap-preferences";
 import ExpoPrecisionMetronomeModule, {
   type BeatEventPayload,
 } from "expo-precision-metronome";
 import { useEffect, useRef, useState } from "react";
-import { Animated, Pressable, Text } from "react-native";
+import { Animated, Pressable, Switch, Text, View } from "react-native";
 
 // Same hold duration SyncRecorder's own live status flash uses — kept
 // separate (not imported) since it's a tiny, purely cosmetic constant, not
@@ -108,6 +109,12 @@ export default function TapRecorder({
 }: TapRecorderProps) {
   const { t } = useTranslation();
   const [tapCount, setTapCount] = useState(0);
+  // Whether pressing the button plays its own click sound (see handlePress)
+  // — on by default, persisted across sessions/launches via
+  // lib/tap-preferences.ts so the choice sticks without needing a global
+  // Settings screen entry. Purely a *sound* toggle: a tap is still captured
+  // and scored exactly the same either way, muted or not.
+  const [soundEnabled, setSoundEnabledState] = useState(true);
   // The latency-compensation value actually in effect right now — see
   // FALLBACK_LATENCY_COMPENSATION_MS above and fetchLatencyCompensation
   // below. Shown in the UI (below) so it's visible per device instead of
@@ -139,6 +146,8 @@ export default function TapRecorder({
   // Mirrors latencyCompensationMs for the synchronous read inside
   // handlePress — same reason every other *Ref above exists.
   const latencyCompensationMsRef = useRef(latencyCompensationMs);
+  // Mirrors soundEnabled for the synchronous read inside handlePress.
+  const soundEnabledRef = useRef(soundEnabled);
 
   // "Beat 1" timestamp — elapsedMs=0 for every tap timestamp recorded
   // below, same role as SyncRecorder's own sessionStartRef.
@@ -193,6 +202,20 @@ export default function TapRecorder({
   useEffect(() => {
     latencyCompensationMsRef.current = latencyCompensationMs;
   }, [latencyCompensationMs]);
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+  }, [soundEnabled]);
+  // Loaded once on mount (not per-arm-cycle) — a sound preference, unlike
+  // isArmed-scoped session state, should carry across repeated
+  // Start/Stop presses within the same visit to this screen.
+  useEffect(() => {
+    getTapSoundEnabled().then(setSoundEnabledState);
+  }, []);
+
+  function toggleSound(next: boolean) {
+    setSoundEnabledState(next);
+    setTapSoundEnabled(next).catch(() => {});
+  }
   useEffect(() => {
     onSessionEndRef.current = onSessionEnd;
   }, [onSessionEnd]);
@@ -332,7 +355,7 @@ export default function TapRecorder({
     // captureArmedRef below) a click here would confusingly mix with the
     // metronome's own count-in clicks. This only silences the *sound*: a
     // tap on the count-in's last beat is still captured for scoring.
-    if (recordingStartedRef.current) {
+    if (recordingStartedRef.current && soundEnabledRef.current) {
       ExpoPrecisionMetronomeModule.playTapClick();
     }
     // Too early even for the lead-in beat (still mid count-in) — nothing
@@ -386,7 +409,11 @@ export default function TapRecorder({
     // strictly tighter band than onTime, regardless of the session's own
     // tolerance. Same count-in guard as the regular click: no audio during
     // the count-in even though a lead-in-beat tap still gets scored.
-    if (recordingStartedRef.current && isPerfectAlignment(delta, toleranceRef.current)) {
+    if (
+      recordingStartedRef.current &&
+      soundEnabledRef.current &&
+      isPerfectAlignment(delta, toleranceRef.current)
+    ) {
       ExpoPrecisionMetronomeModule.playPerfectClick();
     }
 
@@ -511,9 +538,23 @@ export default function TapRecorder({
 
   return (
     <DarkPanel className="px-4 py-4 gap-3 w-full" style={{ flex: 1 }}>
-      <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
-        {t("tapRecorder.inputTap")}
-      </Text>
+      <View className="flex-row items-center justify-between">
+        <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+          {t("tapRecorder.inputTap")}
+        </Text>
+
+        <View className="flex-row items-center gap-2">
+          <Text className="text-neutral-500 text-[11px] font-semibold uppercase tracking-widest">
+            {t("tapRecorder.soundToggle")}
+          </Text>
+          <Switch
+            value={soundEnabled}
+            onValueChange={toggleSound}
+            trackColor={{ false: "rgba(255,255,255,0.15)", true: ACCENT_COLOR }}
+            thumbColor="#FFFFFF"
+          />
+        </View>
+      </View>
 
       <AnimatedPressable
         // onPressIn (finger-down), not onPress (finger-up, i.e. release) —
