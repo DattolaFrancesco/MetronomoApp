@@ -17,7 +17,9 @@ import {
   evaluatedSubBeats,
   type ExpectedHit,
   type HitDiagnostic,
+  matchRadiusForHits,
   matchTapsToExpectedHits,
+  MIN_ONSET_STRENGTH,
   type OnsetEvent,
   type SessionSummary,
   type SixteenthTarget,
@@ -41,6 +43,13 @@ export type ChallengeSegment = {
   tripletTarget: TripletTarget;
   sixteenthTarget: SixteenthTarget;
   label: string;
+  // Overrides the single tripletTarget/sixteenthTarget evaluated position
+  // with several sub-beat indices evaluated within the *same* quarter (see
+  // evaluatedSubBeats) — e.g. [0, 1] for "battere and the 2nd sixteenth,
+  // back to back". iOS mic mode only for now (scoreChallengeFromOnsets);
+  // scoreChallenge (the Android/legacy waveform path) doesn't read this
+  // yet and just falls back to the segment's single target.
+  subBeats?: number[];
 };
 
 export type ChallengeId =
@@ -524,10 +533,6 @@ export function scoreChallengeFromTaps(
   const beatIntervalMs = 60000 / bpm;
   const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
   const totalBars = challengeBars(challenge);
-  // Same reasoning as analyzeSession's own matchRadius: every subdivision
-  // evaluates exactly one sub-beat per quarter, so the search never needs
-  // to reach past half a beat interval either side of it.
-  const matchRadius = beatIntervalMs / 2;
 
   // One expected-hit entry per evaluated sub-beat, built per-quarter from
   // that quarter's own segment (unlike computeExpectedHits, which assumes
@@ -548,6 +553,7 @@ export function scoreChallengeFromTaps(
       segment.subdivision,
       segment.tripletTarget,
       segment.sixteenthTarget,
+      segment.subBeats,
     )) {
       expectedHits.push({
         beatIndex: quarterIndex % BEATS_PER_BAR,
@@ -558,6 +564,12 @@ export function scoreChallengeFromTaps(
       });
     }
   });
+  // Same reasoning as analyzeSession's own matchRadius when every segment
+  // evaluates a single sub-beat per quarter — but shrinks automatically for
+  // a segment with a close-together subBeats override (see
+  // matchRadiusForHits), so two nearby targets can't reach into each
+  // other's search window.
+  const matchRadius = matchRadiusForHits(expectedHits, beatIntervalMs);
 
   // hitDiagnostics[i] always corresponds to expectedHits[i] — one-to-one,
   // in order (see matchTapsToExpectedHits) — so events for the per-bar
@@ -572,9 +584,12 @@ export function scoreChallengeFromTaps(
     matchRadius,
   );
 
-  const hits: (ChallengeHitResult | undefined)[] = new Array(
-    challenge.quarterSegments.length,
-  );
+  // Ordered by expectedHits (already chronological), not pre-sized to one
+  // slot per quarter — a segment with a multi-entry subBeats override (see
+  // ChallengeSegment) contributes more than one hit for the same
+  // quarterIndex, which a fixed quarterIndex-keyed slot would silently
+  // overwrite down to just the last one.
+  const hits: ChallengeHitResult[] = [];
   const barEvents: OnsetEvent[][] = Array.from({ length: totalBars }, () => []);
   const barHitDiagnostics: HitDiagnostic[][] = Array.from({ length: totalBars }, () => []);
   const barLabels: string[][] = Array.from({ length: totalBars }, () => []);
@@ -608,10 +623,15 @@ export function scoreChallengeFromTaps(
       });
     }
 
-    hits[quarterIndex] = toHitResult(
-      `${segment.label} ${(quarterIndex % BEATS_PER_BAR) + 1}`,
-      diag,
-    );
+    // A segment.subBeats override means more than one hit can share the
+    // same quarterIndex — disambiguate those with the sub-beat position;
+    // the plain "<label> <quarter>" form stays unchanged for every
+    // existing single-target segment.
+    const label =
+      segment.subBeats && segment.subBeats.length > 1
+        ? `${segment.label} ${(quarterIndex % BEATS_PER_BAR) + 1}.${diag.subBeatIndex + 1}`
+        : `${segment.label} ${(quarterIndex % BEATS_PER_BAR) + 1}`;
+    hits.push(toHitResult(label, diag));
 
     if (!barLabels[barIndex].includes(segment.label)) {
       barLabels[barIndex].push(segment.label);
@@ -652,12 +672,152 @@ export function scoreChallengeFromTaps(
     });
   }
 
-  const orderedHits = hits.filter(
-    (h): h is ChallengeHitResult => h !== undefined,
-  );
   return {
-    passed: orderedHits.every((h) => h.onTime),
-    hits: orderedHits,
+    passed: hits.every((h) => h.onTime),
+    hits,
+    debugGroups,
+  };
+}
+
+// iOS mic-mode counterpart to scoreChallengeFromTaps — same shape/reasoning
+// (a single matchTapsToExpectedHits pass over the whole challenge, then
+// regrouped into per-bar debugGroups), but for the native onset detector's
+// discrete timestamp+strength list (see SessionSummary.onsetTimesMs)
+// instead of tap timestamps. The only real difference from the tap version
+// is filtering onsets below MIN_ONSET_STRENGTH first — the same soft gate
+// analyzeOnsetSession applies for free-mode sessions — and carrying each
+// matched onset's real strength onto its event amplitude instead of tap's
+// flat 1.
+export function scoreChallengeFromOnsets(
+  challenge: Challenge,
+  onsetTimesMs: number[],
+  onsetStrengths: number[],
+  bpm: number,
+): ChallengeResult {
+  const beatIntervalMs = 60000 / bpm;
+  const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
+  const totalBars = challengeBars(challenge);
+
+  const kept: number[] = [];
+  const keptStrengths: number[] = [];
+  for (let i = 0; i < onsetTimesMs.length; i++) {
+    if ((onsetStrengths[i] ?? 1) >= MIN_ONSET_STRENGTH) {
+      kept.push(onsetTimesMs[i]);
+      keptStrengths.push(onsetStrengths[i] ?? 1);
+    }
+  }
+
+  const expectedHits: (ExpectedHit & {
+    quarterIndex: number;
+    segment: ChallengeSegment;
+  })[] = [];
+  challenge.quarterSegments.forEach((segment, quarterIndex) => {
+    const beatTime = quarterIndex * beatIntervalMs;
+    const steps = SUBDIVISION_STEPS[segment.subdivision];
+    const subIntervalMs = beatIntervalMs / steps;
+    for (const sub of evaluatedSubBeats(
+      segment.subdivision,
+      segment.tripletTarget,
+      segment.sixteenthTarget,
+      segment.subBeats,
+    )) {
+      expectedHits.push({
+        beatIndex: quarterIndex % BEATS_PER_BAR,
+        subBeatIndex: sub,
+        time: beatTime + sub * subIntervalMs,
+        quarterIndex,
+        segment,
+      });
+    }
+  });
+  const matchRadius = matchRadiusForHits(expectedHits, beatIntervalMs);
+
+  const { hitDiagnostics } = matchTapsToExpectedHits(
+    expectedHits,
+    kept,
+    challenge.toleranceMs,
+    matchRadius,
+    keptStrengths,
+  );
+
+  // See scoreChallengeFromTaps' identical comment — ordered by
+  // expectedHits, not pre-sized to one slot per quarter, so a subBeats
+  // override's extra hit per quarter doesn't get silently dropped.
+  const hits: ChallengeHitResult[] = [];
+  const barEvents: OnsetEvent[][] = Array.from({ length: totalBars }, () => []);
+  const barHitDiagnostics: HitDiagnostic[][] = Array.from({ length: totalBars }, () => []);
+  const barLabels: string[][] = Array.from({ length: totalBars }, () => []);
+  const barGrid: (ChallengeSegment | null)[] = new Array(totalBars).fill(null);
+  let eventId = 0;
+
+  hitDiagnostics.forEach((diag, i) => {
+    const { quarterIndex, segment } = expectedHits[i];
+    const barIndex = Math.floor(quarterIndex / BEATS_PER_BAR);
+    const barRelativeExpectedTimeMs = diag.expectedTimeMs - barIndex * barDurationMs;
+
+    barHitDiagnostics[barIndex].push({
+      ...diag,
+      expectedTimeMs: barRelativeExpectedTimeMs,
+    });
+    if (diag.matched) {
+      barEvents[barIndex].push({
+        id: eventId++,
+        elapsedMs: barRelativeExpectedTimeMs,
+        deltaMs: diag.deltaMs!,
+        status: diag.status!,
+        beatIndex: diag.beatIndex,
+        subBeatIndex: diag.subBeatIndex,
+        amplitude: diag.candidateAmplitude ?? 1,
+      });
+    }
+
+    const label =
+      segment.subBeats && segment.subBeats.length > 1
+        ? `${segment.label} ${(quarterIndex % BEATS_PER_BAR) + 1}.${diag.subBeatIndex + 1}`
+        : `${segment.label} ${(quarterIndex % BEATS_PER_BAR) + 1}`;
+    hits.push(toHitResult(label, diag));
+
+    if (!barLabels[barIndex].includes(segment.label)) {
+      barLabels[barIndex].push(segment.label);
+    }
+    if (
+      barGrid[barIndex] === null ||
+      segment.subdivision === "triplet" ||
+      segment.subdivision === "sixteenth"
+    ) {
+      barGrid[barIndex] = segment;
+    }
+  });
+
+  const debugGroups: ChallengeDebugGroup[] = [];
+  for (let barIndex = 0; barIndex < totalBars; barIndex++) {
+    const grid = barGrid[barIndex]!;
+    debugGroups.push({
+      label: barLabels[barIndex].join(" / "),
+      barIndex,
+      summary: {
+        events: barEvents[barIndex],
+        rejectedPeaks: [],
+        hitDiagnostics: barHitDiagnostics[barIndex],
+        durationMs: barDurationMs,
+        toleranceMs: challenge.toleranceMs,
+        bpm,
+        subdivision: grid.subdivision,
+        tripletTarget: grid.tripletTarget,
+        sixteenthTarget: grid.sixteenthTarget,
+        waveform: [],
+        maxBars: 1,
+        leadInMs: 0,
+        inputSource: "microphone",
+        onsetTimesMs: kept,
+        onsetStrengths: keptStrengths,
+      },
+    });
+  }
+
+  return {
+    passed: hits.every((h) => h.onTime),
+    hits,
     debugGroups,
   };
 }

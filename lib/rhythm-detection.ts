@@ -41,6 +41,24 @@ export type OnsetStatus = "onTime" | "early" | "late";
 // — a tap has no amplitude/threshold ambiguity to begin with.
 export type InputSource = "microphone" | "tap";
 
+// A mic session on iOS no longer produces a decimated waveform — the native
+// engine (see expo-precision-metronome's OnsetDetector) runs spectral-flux
+// onset detection on the raw PCM and emits a discrete list of attack
+// timestamps + strengths, exactly the shape tap mode already produced. When
+// a SessionSummary carries `onsetTimesMs`, it's scored through the same
+// discrete-timestamp path tap mode uses (analyzeOnsetSession), not
+// analyzeSession's waveform search — its `inputSource` stays "microphone"
+// but `waveform` is empty and `displayEnvelope` (a much finer RMS trace)
+// drives the report chart instead.
+export type DisplayEnvelope = {
+  values: number[];
+  // Milliseconds each value covers.
+  hopMs: number;
+  // How far before elapsedMs=0 (true beat 1) values[0] sits — same role as
+  // SessionSummary.leadInMs, just for this finer trace.
+  startOffsetMs: number;
+};
+
 export type OnsetEvent = {
   id: number;
   elapsedMs: number;
@@ -158,6 +176,16 @@ export type SessionSummary = {
   // has the original input available. Optional for the same reason as
   // inputSource above; absent/undefined for every microphone-mode session.
   tapTimesMs?: number[];
+  // Discrete attack timestamps from the iOS native onset detector
+  // (elapsedMs, same origin as OnsetEvent.elapsedMs) and their 0..1
+  // strengths, index-aligned. Present only for an iOS mic session; when
+  // present, this is scored like a tap session (see analyzeOnsetSession).
+  onsetTimesMs?: number[];
+  onsetStrengths?: number[];
+  // Fine RMS trace for the report chart, replacing `waveform` for iOS mic
+  // sessions (see DisplayEnvelope). Absent for tap and legacy waveform mic
+  // sessions.
+  displayEnvelope?: DisplayEnvelope;
 };
 
 // ---- Constants ----
@@ -198,6 +226,14 @@ export const MIN_PEAK_AMPLITUDE = 0.3;
 // still get picked; lower it if real (especially soft or
 // gradually-attacked) hits start getting missed entirely.
 export const MIN_ONSET_RISE = 0.08;
+
+// Minimum 0..1 strength (see OnsetEventPayload.strength / DisplayEnvelope)
+// for a native onset to be treated as a real hit rather than ambient noise
+// or a stray transient. The native detector already applies an adaptive
+// spectral-flux threshold; this is a second, softer gate on the JS side so
+// the bar for "counts as a hit" can be tuned without a native rebuild.
+// Raise if room noise sneaks in as phantom hits; lower if soft hits are dropped.
+export const MIN_ONSET_STRENGTH = 0.12;
 
 // Decimated (bucket-max) amplitude history kept for the full-session
 // waveform shown later in the report — far coarser than the live poll rate
@@ -245,11 +281,27 @@ export function clamp(value: number, min: number, max: number): number {
 // one, "il levare", sub-beat 1); for "triplet"/"sixteenth" it's whichever
 // off-beat note the user picked on the recording screen (see
 // TripletTarget/SixteenthTarget).
+// `override` (a Challenge segment's own `subBeats`) wins over the single
+// tripletTarget/sixteenthTarget position when given — this is what makes a
+// segment evaluate more than one sub-beat within the same quarter (e.g.
+// "battere" (0) *and* the 2nd sixteenth (1) back to back, close together —
+// the whole point of a segment like that is testing two nearby hits, not
+// two hits a full beat apart). Values are clamped to 0..steps-1, deduped
+// and sorted; an empty or all-invalid override falls back to the single-
+// target behavior below.
 export function evaluatedSubBeats(
   subdivision: Subdivision,
   tripletTarget: TripletTarget,
   sixteenthTarget: SixteenthTarget,
+  override?: readonly number[],
 ): number[] {
+  const steps = SUBDIVISION_STEPS[subdivision];
+  if (override && override.length > 0) {
+    const cleaned = Array.from(
+      new Set(override.filter((s) => Number.isInteger(s) && s >= 0 && s < steps)),
+    ).sort((a, b) => a - b);
+    if (cleaned.length > 0) return cleaned;
+  }
   switch (subdivision) {
     case "quarter":
       return [0];
@@ -709,6 +761,26 @@ export function analyzeSession(
 
 // ---- Tap-input session analysis ----
 
+// Half the tightest gap between adjacent expected hits, capped at half a
+// beat. When every quarter evaluates a single sub-beat this is just
+// beatIntervalMs/2 (matchTapsToExpectedHits' old fixed radius); when a
+// segment evaluates several sub-beats close together within the same
+// quarter (see ChallengeSegment.subBeats/evaluatedSubBeats' override) it
+// shrinks so neighboring targets can't reach into each other's window and
+// steal a tap/onset that actually belongs to the other one.
+export function matchRadiusForHits(
+  expectedHits: readonly { time: number }[],
+  beatIntervalMs: number,
+): number {
+  const halfBeat = beatIntervalMs / 2;
+  let minGap = Infinity;
+  for (let i = 1; i < expectedHits.length; i++) {
+    const gap = expectedHits[i].time - expectedHits[i - 1].time;
+    if (gap > 0 && gap < minGap) minGap = gap;
+  }
+  return Number.isFinite(minGap) ? Math.min(halfBeat, minGap / 2) : halfBeat;
+}
+
 // Same matching *result* shape as analyzeSession (events/hitDiagnostics),
 // but for a discrete list of tap timestamps instead of a continuous
 // waveform — there's no amplitude/attack-shape question to answer (a tap
@@ -722,6 +794,9 @@ export function matchTapsToExpectedHits(
   tapTimesMs: number[],
   toleranceMs: number,
   matchRadiusMs: number,
+  // Index-aligned with tapTimesMs. When given, a matched event's amplitude
+  // carries the real onset strength instead of the flat 1 a button tap has.
+  tapStrengths?: number[],
 ): {
   events: OnsetEvent[];
   hitDiagnostics: HitDiagnostic[];
@@ -758,10 +833,11 @@ export function matchTapsToExpectedHits(
         status,
         beatIndex: hit.beatIndex,
         subBeatIndex: hit.subBeatIndex,
-        // Taps have no amplitude — 1 (the top of the 0-1 scale everything
-        // else here uses) so anything that treats "louder is more real"
-        // never discounts a tap.
-        amplitude: 1,
+        // A button tap has no amplitude — 1 (the top of the 0-1 scale
+        // everything else here uses) so anything that treats "louder is
+        // more real" never discounts it. A native onset carries its real
+        // detected strength when tapStrengths is supplied.
+        amplitude: tapStrengths?.[bestIndex] ?? 1,
       });
     }
 
@@ -828,4 +904,60 @@ export function analyzeTapSession(
   ).filter((hit) => hit.time <= durationMs + beatIntervalMs);
 
   return matchTapsToExpectedHits(expectedHits, tapTimesMs, toleranceMs, matchRadius);
+}
+
+// The iOS mic-mode counterpart to analyzeTapSession. A native onset is just
+// a timestamp like a tap, so the matching is identical — the only extra
+// work is dropping onsets below MIN_ONSET_STRENGTH (ambient noise / stray
+// transients the native adaptive threshold let through) before matching,
+// and carrying each kept onset's real strength onto its event amplitude.
+export function analyzeOnsetSession(
+  onsetTimesMs: number[],
+  onsetStrengths: number[],
+  durationMs: number,
+  bpm: number,
+  subdivision: Subdivision,
+  tripletTarget: TripletTarget,
+  sixteenthTarget: SixteenthTarget,
+  toleranceMs: number,
+  maxBars: number | undefined,
+): {
+  events: OnsetEvent[];
+  hitDiagnostics: HitDiagnostic[];
+} {
+  const beatIntervalMs = 60000 / bpm;
+  if (!Number.isFinite(beatIntervalMs) || beatIntervalMs <= 0) {
+    return { events: [], hitDiagnostics: [] };
+  }
+
+  const times: number[] = [];
+  const strengths: number[] = [];
+  for (let i = 0; i < onsetTimesMs.length; i++) {
+    if ((onsetStrengths[i] ?? 1) >= MIN_ONSET_STRENGTH) {
+      times.push(onsetTimesMs[i]);
+      strengths.push(onsetStrengths[i] ?? 1);
+    }
+  }
+
+  const matchRadius = beatIntervalMs / 2;
+  const totalQuarters =
+    maxBars != null
+      ? maxBars * BEATS_PER_BAR
+      : Math.ceil(durationMs / beatIntervalMs) + 1;
+
+  const expectedHits = computeExpectedHits(
+    bpm,
+    subdivision,
+    tripletTarget,
+    sixteenthTarget,
+    totalQuarters,
+  ).filter((hit) => hit.time <= durationMs + beatIntervalMs);
+
+  return matchTapsToExpectedHits(
+    expectedHits,
+    times,
+    toleranceMs,
+    matchRadius,
+    strengths,
+  );
 }

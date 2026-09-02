@@ -5,6 +5,7 @@ import {
   WAVEFORM_SAMPLE_INTERVAL_MS,
   type SessionSummary,
 } from "@/components/sync-recorder";
+import { clamp } from "@/lib/rhythm-detection";
 import { useTranslation } from "@/lib/i18n";
 import { Canvas, Path, Skia, type SkPath } from "@shopify/react-native-skia";
 import { useMemo, useState } from "react";
@@ -49,6 +50,17 @@ const SIXTEENTH_TICK_COLOR = "rgba(255,255,255,0.16)";
 // positions of the session that was actually recorded.
 const SUBDIVISION_SECONDARY_TICK_COLOR = "rgba(255,255,255,0.3)";
 const WAVEFORM_FILL_COLOR = "rgba(255,138,128,0.35)";
+
+// Same normalization sync-recorder.tsx's own SILENCE_FLOOR_DB applies to
+// the legacy metering-based waveform, reused here so an iOS mic session's
+// displayEnvelope (raw linear RMS, not pre-normalized) reads on the same
+// visual 0..1 scale instead of looking uniformly duller/louder than a
+// summary.waveform-based row would.
+const ENVELOPE_SILENCE_FLOOR_DB = -50;
+function envelopeValueToNorm(value: number): number {
+  const db = value > 0 ? 20 * Math.log10(value) : ENVELOPE_SILENCE_FLOOR_DB;
+  return clamp((db - ENVELOPE_SILENCE_FLOOR_DB) / (0 - ENVELOPE_SILENCE_FLOOR_DB), 0, 1);
+}
 
 // One line per accepted onset, on-time or not — the chips/stat counts in
 // session-report.tsx already carry the accuracy color-coding; this chart's
@@ -118,9 +130,11 @@ export default function DebugChart({
 
   const beatIntervalMs = 60000 / summary.bpm;
   const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
+  const envelope = summary.displayEnvelope;
   const totalMs = Math.max(
     summary.durationMs,
     summary.waveform.length * WAVEFORM_SAMPLE_INTERVAL_MS,
+    envelope ? envelope.values.length * envelope.hopMs : 0,
   );
 
   // One row per bar, each spanning the full measured width — the whole
@@ -171,20 +185,42 @@ export default function DebugChart({
       // "Input audio" view, just a filled silhouette here. Bucket time is
       // waveform-relative (index 0 = true time -leadInMs), so bar-relative
       // true time needs +leadInMs to land on the right bucket.
+      //
+      // An iOS mic session carries its trace in displayEnvelope instead of
+      // summary.waveform (see DisplayEnvelope) — much finer (native ~5ms
+      // hop vs. the legacy 50ms bucket) and built from real recorded
+      // samples, not smoothed live metering. Same drawing logic either way,
+      // just parameterized on which bucket size/offset/value-source to
+      // read; envelope wins when present since it's always the more
+      // precise trace for any session that has one.
       const waveformPath = Skia.Path.Make();
-      if (summary.inputSource !== "tap" && summary.waveform.length > 0) {
+      const waveformSource = envelope
+        ? {
+            length: envelope.values.length,
+            hopMs: envelope.hopMs,
+            offsetMs: envelope.startOffsetMs,
+            valueAt: (i: number) => envelopeValueToNorm(envelope.values[i]),
+          }
+        : {
+            length: summary.waveform.length,
+            hopMs: WAVEFORM_SAMPLE_INTERVAL_MS,
+            offsetMs: leadInMs,
+            valueAt: (i: number) => summary.waveform[i],
+          };
+      if (summary.inputSource !== "tap" && waveformSource.length > 0) {
+        const { length, hopMs, offsetMs, valueAt } = waveformSource;
         const firstBucket = Math.max(
           0,
-          Math.floor((barStart + leadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS) - 1,
+          Math.floor((barStart + offsetMs) / hopMs) - 1,
         );
         const lastBucket = Math.min(
-          summary.waveform.length - 1,
-          Math.ceil((barEnd + leadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS) + 1,
+          length - 1,
+          Math.ceil((barEnd + offsetMs) / hopMs) + 1,
         );
         for (let b = firstBucket; b <= lastBucket; b++) {
-          const trueTime = b * WAVEFORM_SAMPLE_INTERVAL_MS - leadInMs;
+          const trueTime = b * hopMs - offsetMs;
           const x = (trueTime - barStart) * rowPxPerMs;
-          const y = baseline - Math.max(1, summary.waveform[b] * CHART_HEIGHT);
+          const y = baseline - Math.max(1, valueAt(b) * CHART_HEIGHT);
           if (b === firstBucket) {
             waveformPath.moveTo(x, baseline);
             waveformPath.lineTo(x, y);
@@ -193,7 +229,7 @@ export default function DebugChart({
           }
         }
         if (lastBucket >= firstBucket) {
-          const lastTrueTime = lastBucket * WAVEFORM_SAMPLE_INTERVAL_MS - leadInMs;
+          const lastTrueTime = lastBucket * hopMs - offsetMs;
           const lastX = (lastTrueTime - barStart) * rowPxPerMs;
           waveformPath.lineTo(lastX, baseline);
           waveformPath.close();
@@ -310,6 +346,7 @@ export default function DebugChart({
     barDurationMs,
     totalMs,
     summary.waveform,
+    envelope,
     summary.events,
     summary.maxBars,
     summary.leadInMs,

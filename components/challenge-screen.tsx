@@ -16,6 +16,7 @@ import {
   challengeBars,
   CHALLENGES,
   scoreChallenge,
+  scoreChallengeFromOnsets,
   scoreChallengeFromTaps,
   type Challenge,
   type ChallengeDifficulty,
@@ -480,20 +481,30 @@ function ChallengeSession({
     setCountInBeat(null);
   };
 
-  // The 8-hit pass/fail verdict comes entirely from re-analyzing either the
-  // raw waveform SyncRecorder just recorded (scoreChallenge) or the raw tap
-  // timestamps TapRecorder just recorded (scoreChallengeFromTaps) — which
-  // one ran is read straight off the summary itself (inputSource), not off
-  // this component's own inputMode state, so this stays correct even if a
-  // report is ever re-derived from an already-finished summary later. The
-  // fixed subdivision="quarter" passed to both recorders below is only ever
-  // used for their own (here unused) live approximate status flash, never
-  // for this result.
+  // The 8-hit pass/fail verdict comes entirely from re-analyzing one of
+  // three things SyncRecorder/TapRecorder just recorded: the raw tap
+  // timestamps (scoreChallengeFromTaps), the iOS native detector's discrete
+  // onset timestamps (scoreChallengeFromOnsets — see
+  // SessionSummary.onsetTimesMs), or the legacy continuous waveform
+  // (scoreChallenge, still what Android mic sessions produce). Which one
+  // ran is read straight off the summary itself (inputSource/onsetTimesMs),
+  // not off this component's own inputMode state, so this stays correct
+  // even if a report is ever re-derived from an already-finished summary
+  // later. The fixed subdivision="quarter" passed to both recorders below
+  // is only ever used for their own (here unused) live approximate status
+  // flash, never for this result.
   const handleSessionEnd = async (summary: SessionSummary) => {
     const scored =
       summary.inputSource === "tap"
         ? scoreChallengeFromTaps(challenge, summary.tapTimesMs ?? [], summary.bpm)
-        : scoreChallenge(challenge, summary.waveform, summary.bpm, summary.leadInMs);
+        : summary.onsetTimesMs
+          ? scoreChallengeFromOnsets(
+              challenge,
+              summary.onsetTimesMs,
+              summary.onsetStrengths ?? [],
+              summary.bpm,
+            )
+          : scoreChallenge(challenge, summary.waveform, summary.bpm, summary.leadInMs);
     setResult(scored);
     if (scored.passed) {
       await markChallengeCompleted(challenge.id);

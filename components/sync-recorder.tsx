@@ -1,6 +1,7 @@
 import DarkPanel from "@/components/dark-panel";
 import { useTranslation } from "@/lib/i18n";
 import {
+  analyzeOnsetSession,
   analyzeSession,
   BEATS_PER_BAR,
   classifyOnset,
@@ -15,8 +16,10 @@ import {
   extendClickGate,
   isWithinClickGate,
   MIN_ONSET_RISE,
+  MIN_ONSET_STRENGTH,
   MIN_PEAK_AMPLITUDE,
   primarySubBeat,
+  type DisplayEnvelope,
   type SixteenthTarget,
   SUBDIVISION_STEPS,
   WAVEFORM_SAMPLE_INTERVAL_MS,
@@ -39,14 +42,22 @@ import {
 import ExpoPrecisionMetronomeModule, {
   type BeatAccent,
   type BeatEventPayload,
+  type OnsetEventPayload,
 } from "expo-precision-metronome";
 import { memo, useEffect, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { Platform, Text, View } from "react-native";
 import Animated, {
   type SharedValue,
   useAnimatedStyle,
   useSharedValue,
 } from "react-native-reanimated";
+
+// iOS gets its onset detection from the native spectral-flux detector (see
+// expo-precision-metronome's OnsetDetector.swift) instead of this file's
+// legacy expo-audio metering/poll pipeline — see the branches below keyed on
+// this constant. Android has no native onset detector yet (see the patch's
+// startOnsetDetection stub), so it stays on the original path unchanged.
+const IS_IOS = Platform.OS === "ios";
 
 // All the pure rhythm/onset-detection math (expected timestamps, peak
 // selection, the rise/derivative onset criterion, early/on-time/late
@@ -65,6 +76,7 @@ export {
   WAVEFORM_SAMPLE_INTERVAL_MS,
   evaluatedSubBeats,
   primarySubBeat,
+  type DisplayEnvelope,
   type HitDiagnostic,
   type OnsetEvent,
   type OnsetStatus,
@@ -287,6 +299,49 @@ export default function SyncRecorder({
 
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // --- iOS native onset detector state (see IS_IOS above) ---
+  // Whether ExpoPrecisionMetronomeModule.startOnsetDetection() actually
+  // resolved for the current arm cycle — gates whether teardown needs to
+  // call stopOnsetDetection()/getCaptureEnvelope() at all.
+  const nativeOnsetStartedRef = useRef(false);
+  // Raw AVAudioTime host-time ms of the tracked session's true beat 1 — same
+  // clock as BeatEventPayload.hostTimeMs/OnsetEventPayload.hostTimeMs, and
+  // the origin every collected onset timestamp is converted to elapsedMs
+  // against at teardown. Distinct from sessionStartRef (Date.now()-based,
+  // kept for durationMs and the "is a session running" check on both
+  // platforms).
+  const sessionStartHostMsRef = useRef<number | null>(null);
+  // Every onset the native detector has reported since the audio pipeline
+  // armed (maybeStartAudioPipeline), host-time ms, index-aligned with
+  // onsetStrengthsRef — the raw input to analyzeOnsetSession at teardown.
+  const onsetTimesRef = useRef<number[]>([]);
+  const onsetStrengthsRef = useRef<number[]>([]);
+  // Mirrors lastBeatRef but for hostTimeMs — needed by the prep-finished
+  // fallback path (see the effect below) to seed sessionStartHostMsRef if
+  // the count-in already elapsed before setup finished.
+  const lastBeatHostTimeMsRef = useRef(0);
+  // Live capture windows for the approximate status banner, iOS's
+  // event-driven counterpart to pendingBeatsRef below — matched directly
+  // against onOnset events (host-time ms) instead of polled amplitude
+  // samples, since the native detector already reports exact attack
+  // timestamps and already excludes the metronome's own click.
+  const pendingOnsetWindowsRef = useRef<
+    {
+      id: number;
+      windowStart: number;
+      windowEnd: number;
+      beatTimeHostMs: number;
+      matchedHostTimeMs: number | null;
+    }[]
+  >([]);
+  const onsetWindowIdRef = useRef(0);
+  // Current amplitude driving the live waveform bars on iOS — spiked by an
+  // incoming onset's strength, decayed each iosVisualTick instead of being
+  // read straight off a polled mic level (there's no continuous live level
+  // to poll; the native detector only reports discrete attacks + a capture
+  // envelope read once at teardown).
+  const iosCurrentAmpRef = useRef(0);
 
   // The "beat 1" timestamp — elapsedMs=0 for everything reported (events,
   // durationMs). Unlike waveformStartRef below, this is never shifted, so
@@ -582,6 +637,64 @@ export default function SyncRecorder({
     pendingBeatRef.current = null;
   }
 
+  // iOS counterpart to openBeatWindow: opens a live capture window keyed on
+  // host-time ms (beatTimeHostMs, same clock as onOnset events) instead of
+  // Date.now(). Resolved by a setTimeout instead of pollTick's per-tick
+  // sweep, since there's no poll loop scanning amplitude on iOS — windowHalf
+  // ms after opening is when this window's onset search would have closed
+  // anyway, so that's when the timeout fires (+ a little slack for the
+  // event to actually arrive over the bridge).
+  function openOnsetBeatWindow(
+    beatTimeHostMs: number,
+    windowHalf: number,
+  ) {
+    const id = onsetWindowIdRef.current++;
+    pendingOnsetWindowsRef.current.push({
+      id,
+      beatTimeHostMs,
+      windowStart: beatTimeHostMs - windowHalf,
+      windowEnd: beatTimeHostMs + windowHalf,
+      matchedHostTimeMs: null,
+    });
+    setTimeout(() => resolveOnsetWindow(id), windowHalf + 15);
+  }
+
+  // Fires the same approximate status banner as finalizePendingBeats, once
+  // this window's deadline has passed — using the exact host-time delta
+  // between the matched onset and the beat instead of a polled sample time.
+  function resolveOnsetWindow(id: number) {
+    const list = pendingOnsetWindowsRef.current;
+    const index = list.findIndex((w) => w.id === id);
+    if (index === -1) return;
+    const win = list[index];
+    pendingOnsetWindowsRef.current = list.filter((w) => w.id !== id);
+
+    if (win.matchedHostTimeMs !== null) {
+      const delta = win.matchedHostTimeMs - win.beatTimeHostMs;
+      const status = classifyOnset(delta, toleranceRef.current);
+
+      onStatusChangeRef.current?.(status, delta);
+
+      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+      statusTimeoutRef.current = setTimeout(() => {
+        onStatusChangeRef.current?.(null, null);
+      }, STATUS_HOLD_MS);
+    }
+  }
+
+  // iOS counterpart to pollTick, but purely cosmetic: there's no continuous
+  // mic level to sample (the native detector only emits discrete onsets), so
+  // this just animates the same sliding bars/accent flash off
+  // iosCurrentAmpRef (spiked by onOnset, decayed here every tick) instead of
+  // driving any actual detection.
+  function iosVisualTick() {
+    amplitudesSV.value = [...amplitudesSV.value.slice(1), iosCurrentAmpRef.current];
+    accentsSV.value = [...accentsSV.value.slice(1), pendingBeatRef.current];
+    pendingBeatRef.current = null;
+    iosCurrentAmpRef.current =
+      iosCurrentAmpRef.current < 0.02 ? 0 : iosCurrentAmpRef.current * 0.75;
+  }
+
   // Warms up the mic one beat *before* the tracked session starts: calls
   // recorder.record() and kicks off the poll loop so samples are already
   // flowing by the time the real first beat's peak-capture window opens.
@@ -603,15 +716,33 @@ export default function SyncRecorder({
     waveformRef.current = [];
     waveformBucketIndexRef.current = -1;
     waveformBucketMaxRef.current = 0;
-    recorder.record();
-    pollIntervalRef.current = setInterval(pollTick, POLL_INTERVAL_MS);
+
+    if (IS_IOS) {
+      onsetTimesRef.current = [];
+      onsetStrengthsRef.current = [];
+      pendingOnsetWindowsRef.current = [];
+      iosCurrentAmpRef.current = 0;
+      ExpoPrecisionMetronomeModule.startOnsetDetection()
+        .then(() => {
+          nativeOnsetStartedRef.current = true;
+        })
+        .catch(() => {});
+      pollIntervalRef.current = setInterval(iosVisualTick, POLL_INTERVAL_MS);
+    } else {
+      recorder.record();
+      pollIntervalRef.current = setInterval(pollTick, POLL_INTERVAL_MS);
+    }
   }
 
   // Flips on the tracked session (elapsedMs baseline, event/waveform
   // collection) — this is "beat 1". Called synchronously from the onBeat
   // handler on the exact beat that ends the count-in (or, as a fallback,
   // from the prep effect if setup was still pending at that moment).
-  function maybeStartTrackedSession(beat: number, now: number) {
+  function maybeStartTrackedSession(
+    beat: number,
+    now: number,
+    hostTimeMs?: number,
+  ) {
     if (
       !isArmedRef.current ||
       !preparedRef.current ||
@@ -623,30 +754,37 @@ export default function SyncRecorder({
     recordingStartedRef.current = true;
     recordingStartBeatRef.current = beat;
 
-    // The lead-in beat (maybeStartAudioPipeline, above) has been capturing
-    // real audio since roughly one full beat before now — trim that down
-    // to a small, tempo-adaptive pre-roll margin (same sizing as a beat's
-    // own onset-capture window) instead of keeping the whole beat, so a
-    // slow tempo doesn't turn into a huge "before the first quarter" slice.
-    // Only ever shrinks the array (never grows it) since the desired
-    // margin is always well under the elapsed lead-in beat.
-    if (waveformStartRef.current !== null) {
-      const desiredLeadInMs = currentWindowHalfMs(currentBeatIntervalMs());
-      const elapsedSinceWaveformStart = now - waveformStartRef.current;
-      const excessBuckets = Math.min(
-        waveformRef.current.length,
-        Math.floor(
-          (elapsedSinceWaveformStart - desiredLeadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS,
-        ),
-      );
-      if (excessBuckets > 0) {
-        waveformRef.current = waveformRef.current.slice(excessBuckets);
-        waveformStartRef.current += excessBuckets * WAVEFORM_SAMPLE_INTERVAL_MS;
-        waveformBucketIndexRef.current -= excessBuckets;
-      }
-      leadInMsRef.current = now - waveformStartRef.current;
-    } else {
+    if (IS_IOS) {
+      // No waveform-bucket concept on iOS — analyzeOnsetSession matches
+      // discrete onset timestamps directly, so there's nothing to trim.
+      sessionStartHostMsRef.current = hostTimeMs ?? lastBeatHostTimeMsRef.current;
       leadInMsRef.current = 0;
+    } else {
+      // The lead-in beat (maybeStartAudioPipeline, above) has been capturing
+      // real audio since roughly one full beat before now — trim that down
+      // to a small, tempo-adaptive pre-roll margin (same sizing as a beat's
+      // own onset-capture window) instead of keeping the whole beat, so a
+      // slow tempo doesn't turn into a huge "before the first quarter" slice.
+      // Only ever shrinks the array (never grows it) since the desired
+      // margin is always well under the elapsed lead-in beat.
+      if (waveformStartRef.current !== null) {
+        const desiredLeadInMs = currentWindowHalfMs(currentBeatIntervalMs());
+        const elapsedSinceWaveformStart = now - waveformStartRef.current;
+        const excessBuckets = Math.min(
+          waveformRef.current.length,
+          Math.floor(
+            (elapsedSinceWaveformStart - desiredLeadInMs) / WAVEFORM_SAMPLE_INTERVAL_MS,
+          ),
+        );
+        if (excessBuckets > 0) {
+          waveformRef.current = waveformRef.current.slice(excessBuckets);
+          waveformStartRef.current += excessBuckets * WAVEFORM_SAMPLE_INTERVAL_MS;
+          waveformBucketIndexRef.current -= excessBuckets;
+        }
+        leadInMsRef.current = now - waveformStartRef.current;
+      } else {
+        leadInMsRef.current = 0;
+      }
     }
 
     sessionStartRef.current = now;
@@ -659,9 +797,10 @@ export default function SyncRecorder({
   useEffect(() => {
     const subscription = ExpoPrecisionMetronomeModule.addListener(
       "onBeat",
-      ({ beat, accent }: BeatEventPayload) => {
+      ({ beat, accent, hostTimeMs }: BeatEventPayload) => {
         const now = Date.now();
         lastBeatRef.current = beat;
+        lastBeatHostTimeMsRef.current = hostTimeMs;
         pendingBeatRef.current = accent;
 
         // Resolve any straggling windows early (only possible at very fast tempos).
@@ -718,7 +857,11 @@ export default function SyncRecorder({
           tripletTargetRef.current,
           sixteenthTargetRef.current,
         )) {
-          openBeatWindow(now + sub * subIntervalMs, beatIndex, sub, windowHalf);
+          if (IS_IOS) {
+            openOnsetBeatWindow(hostTimeMs + sub * subIntervalMs, windowHalf);
+          } else {
+            openBeatWindow(now + sub * subIntervalMs, beatIndex, sub, windowHalf);
+          }
         }
 
         gateArmedAtRef.current = now;
@@ -727,11 +870,42 @@ export default function SyncRecorder({
         // See the comment on countInBeats for why these can't go through a
         // prop/state flip instead.
         maybeStartAudioPipeline(beat, now);
-        maybeStartTrackedSession(beat, now);
+        maybeStartTrackedSession(beat, now, hostTimeMs);
       },
     );
     return () => subscription.remove();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // iOS only in practice (see IS_IOS) — Android/web never emit onOnset, so
+  // this listener just sits idle there. Every onset is recorded into
+  // onsetTimesRef/onsetStrengthsRef unfiltered (analyzeOnsetSession applies
+  // MIN_ONSET_STRENGTH itself at teardown, same as it does for a real mic
+  // session played back offline); only the *live* banner/visual feedback
+  // below applies the strength gate early, so a barely-above-noise transient
+  // doesn't flash a false status or pulse the waveform bars.
+  useEffect(() => {
+    const subscription = ExpoPrecisionMetronomeModule.addListener(
+      "onOnset",
+      ({ hostTimeMs, strength }: OnsetEventPayload) => {
+        if (audioStartedRef.current) {
+          onsetTimesRef.current.push(hostTimeMs);
+          onsetStrengthsRef.current.push(strength);
+        }
+
+        if (strength < MIN_ONSET_STRENGTH) return;
+
+        iosCurrentAmpRef.current = Math.max(iosCurrentAmpRef.current, strength);
+
+        for (const win of pendingOnsetWindowsRef.current) {
+          if (win.matchedHostTimeMs !== null) continue;
+          if (hostTimeMs >= win.windowStart && hostTimeMs <= win.windowEnd) {
+            win.matchedHostTimeMs = hostTimeMs;
+          }
+        }
+      },
+    );
+    return () => subscription.remove();
   }, []);
 
   // Does all the slow, audio-session-touching setup (permissions,
@@ -771,8 +945,17 @@ export default function SyncRecorder({
         playsInSilentMode: true,
       });
       if (cancelled) return;
-      await recorder.prepareToRecordAsync();
-      if (cancelled) return;
+      // On iOS the native onset detector taps the metronome's own
+      // AVAudioEngine directly (see maybeStartAudioPipeline) — a second,
+      // separate AVAudioRecorder capture here would just double up on the
+      // mic for no benefit, so skip expo-audio's own prepare/record on that
+      // platform. setAudioModeAsync above still matters everywhere: it's
+      // what puts the session into .playAndRecord and is what
+      // startOnsetDetection requires to already be in place.
+      if (!IS_IOS) {
+        await recorder.prepareToRecordAsync();
+        if (cancelled) return;
+      }
 
       preparedRef.current = true;
 
@@ -781,7 +964,11 @@ export default function SyncRecorder({
       // now instead of silently missing the lead-in and/or the session.
       const fallbackNow = Date.now();
       maybeStartAudioPipeline(lastBeatRef.current, fallbackNow);
-      maybeStartTrackedSession(lastBeatRef.current, fallbackNow);
+      maybeStartTrackedSession(
+        lastBeatRef.current,
+        fallbackNow,
+        lastBeatHostTimeMsRef.current,
+      );
     })();
 
     return () => {
@@ -797,11 +984,20 @@ export default function SyncRecorder({
         clearTimeout(limitReachedTimeoutRef.current);
         limitReachedTimeoutRef.current = null;
       }
-      recorder.stop().catch(() => {});
+      if (IS_IOS) {
+        if (nativeOnsetStartedRef.current) {
+          nativeOnsetStartedRef.current = false;
+          ExpoPrecisionMetronomeModule.stopOnsetDetection().catch(() => {});
+        }
+      } else {
+        recorder.stop().catch(() => {});
+      }
       pendingBeatRef.current = null;
       recentSamplesRef.current = [];
       wasAboveThresholdRef.current = false;
       pendingBeatsRef.current = [];
+      pendingOnsetWindowsRef.current = [];
+      iosCurrentAmpRef.current = 0;
       gatedUntilRef.current = 0;
       gateArmedAtRef.current = 0;
       preparedRef.current = false;
@@ -815,41 +1011,104 @@ export default function SyncRecorder({
       onStatusChangeRef.current?.(null, null);
 
       if (sessionStartRef.current !== null) {
-        // Flush the in-progress bucket — it never got closed by a later
-        // sample crossing into the next bucket, since recording just stopped.
-        if (waveformBucketIndexRef.current >= 0) {
-          waveformRef.current.push(waveformBucketMaxRef.current);
-          waveformBucketIndexRef.current = -1;
+        const durationMs = Date.now() - sessionStartRef.current;
+
+        if (IS_IOS && sessionStartHostMsRef.current !== null) {
+          const sessionStartHostMs = sessionStartHostMsRef.current;
+          const onsetTimesMs = onsetTimesRef.current.map(
+            (t) => t - sessionStartHostMs,
+          );
+          const onsetStrengths = onsetStrengthsRef.current;
+          const { events, hitDiagnostics } = analyzeOnsetSession(
+            onsetTimesMs,
+            onsetStrengths,
+            durationMs,
+            bpmRef.current,
+            subdivisionRef.current,
+            tripletTargetRef.current,
+            sixteenthTargetRef.current,
+            toleranceRef.current,
+            maxBarsRef.current,
+          );
+
+          const baseSummary: SessionSummary = {
+            events,
+            rejectedPeaks: [],
+            hitDiagnostics,
+            durationMs,
+            toleranceMs: toleranceRef.current,
+            bpm: bpmRef.current,
+            subdivision: subdivisionRef.current,
+            tripletTarget: tripletTargetRef.current,
+            sixteenthTarget: sixteenthTargetRef.current,
+            waveform: [],
+            maxBars: maxBarsRef.current,
+            leadInMs: 0,
+            inputSource: "microphone",
+            onsetTimesMs,
+            onsetStrengths,
+          };
+
+          // getCaptureEnvelope is a native round-trip, so the report's fine
+          // envelope trace arrives a beat after everything else — fine,
+          // since the caller (typically a report screen) is only ever
+          // shown once this whole callback fires anyway. Falls back to
+          // emitting without displayEnvelope if the native call errors
+          // (e.g. the engine already tore down), rather than losing the
+          // real events/hitDiagnostics along with it.
+          ExpoPrecisionMetronomeModule.getCaptureEnvelope()
+            .then((snap) => {
+              const displayEnvelope: DisplayEnvelope = {
+                values: snap.values,
+                hopMs: snap.hopMs,
+                startOffsetMs: snap.startHostMs - sessionStartHostMs,
+              };
+              onSessionEndRef.current?.({ ...baseSummary, displayEnvelope });
+            })
+            .catch(() => {
+              onSessionEndRef.current?.(baseSummary);
+            });
+        } else {
+          // Flush the in-progress bucket — it never got closed by a later
+          // sample crossing into the next bucket, since recording just
+          // stopped.
+          if (waveformBucketIndexRef.current >= 0) {
+            waveformRef.current.push(waveformBucketMaxRef.current);
+            waveformBucketIndexRef.current = -1;
+          }
+
+          const { events, rejectedPeaks, hitDiagnostics } = analyzeSession(
+            waveformRef.current,
+            durationMs,
+            bpmRef.current,
+            subdivisionRef.current,
+            tripletTargetRef.current,
+            sixteenthTargetRef.current,
+            toleranceRef.current,
+            maxBarsRef.current,
+            leadInMsRef.current,
+          );
+
+          onSessionEndRef.current?.({
+            events,
+            rejectedPeaks,
+            hitDiagnostics,
+            durationMs,
+            toleranceMs: toleranceRef.current,
+            bpm: bpmRef.current,
+            subdivision: subdivisionRef.current,
+            tripletTarget: tripletTargetRef.current,
+            sixteenthTarget: sixteenthTargetRef.current,
+            waveform: waveformRef.current,
+            maxBars: maxBarsRef.current,
+            leadInMs: leadInMsRef.current,
+          });
         }
 
-        const durationMs = Date.now() - sessionStartRef.current;
-        const { events, rejectedPeaks, hitDiagnostics } = analyzeSession(
-          waveformRef.current,
-          durationMs,
-          bpmRef.current,
-          subdivisionRef.current,
-          tripletTargetRef.current,
-          sixteenthTargetRef.current,
-          toleranceRef.current,
-          maxBarsRef.current,
-          leadInMsRef.current,
-        );
-
-        onSessionEndRef.current?.({
-          events,
-          rejectedPeaks,
-          hitDiagnostics,
-          durationMs,
-          toleranceMs: toleranceRef.current,
-          bpm: bpmRef.current,
-          subdivision: subdivisionRef.current,
-          tripletTarget: tripletTargetRef.current,
-          sixteenthTarget: sixteenthTargetRef.current,
-          waveform: waveformRef.current,
-          maxBars: maxBarsRef.current,
-          leadInMs: leadInMsRef.current,
-        });
         sessionStartRef.current = null;
+        sessionStartHostMsRef.current = null;
+        onsetTimesRef.current = [];
+        onsetStrengthsRef.current = [];
         waveformRef.current = [];
         waveformStartRef.current = null;
         leadInMsRef.current = 0;

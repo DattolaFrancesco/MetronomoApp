@@ -1,8 +1,8 @@
 diff --git a/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt b/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
-index 2377c2f..5882ce9 100644
+index 2377c2f..aa8d7c0 100644
 --- a/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
 +++ b/node_modules/expo-precision-metronome/android/src/main/java/net/guitar0/metronome/ExpoPrecisionMetronomeModule.kt
-@@ -76,5 +76,25 @@ class ExpoPrecisionMetronomeModule : Module() {
+@@ -76,5 +76,42 @@ class ExpoPrecisionMetronomeModule : Module() {
          AsyncFunction("setPattern") { pattern: List<BeatAccent> ->
              engine?.setPattern(MetronomeEngine.encodePattern(pattern))
          }
@@ -26,19 +26,85 @@ index 2377c2f..5882ce9 100644
 +        // not the current route's real value), so this needs a real
 +        // decision, not a quick port.
 +        AsyncFunction("getOutputLatencyMs") { 0.0 }
++
++        // TODO: not yet implemented on Android — see the iOS
++        // MetronomeEngine for the reference implementation (mic tap on the
++        // shared AVAudioEngine + spectral-flux onset detection). Android's
++        // mic mode stays on the app's legacy expo-audio path; these are
++        // no-ops so the shared JS wrapper stays cross-platform safe.
++        AsyncFunction("startOnsetDetection") {}
++
++        AsyncFunction("stopOnsetDetection") {}
++
++        AsyncFunction("getCaptureEnvelope") {
++            mapOf(
++                "values" to emptyList<Float>(),
++                "hopMs" to 0.0,
++                "startHostMs" to 0.0
++            )
++        }
      }
  }
+diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronome.types.d.ts b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronome.types.d.ts
+index 13f83e6..d16311f 100644
+--- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronome.types.d.ts
++++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronome.types.d.ts
+@@ -9,13 +9,31 @@ export declare const DEFAULT_BEAT_PATTERN: readonly BeatAccent[];
+ export type BeatEventPayload = {
+     beat: number;
+     timestamp: number;
++    /** AVAudioTime host-time of this beat, in ms — the same clock OnsetEventPayload.hostTimeMs uses. iOS only; 0 elsewhere. */
++    hostTimeMs: number;
+     accent: BeatAccent;
+ };
+ export type StopEventPayload = {
+     reason: "explicit" | "interruption";
+ };
++/** Emitted by the iOS mic onset detector (see startOnsetDetection). */
++export type OnsetEventPayload = {
++    /** AVAudioTime host-time of the detected attack, in ms (same clock as BeatEventPayload.hostTimeMs). */
++    hostTimeMs: number;
++    /** Detected attack strength, 0..1. */
++    strength: number;
++};
++/** Decimated RMS envelope of a mic capture, for the report waveform (see getCaptureEnvelope). */
++export type CaptureEnvelope = {
++    values: number[];
++    /** Time each value covers, in ms. */
++    hopMs: number;
++    /** Host-time ms of values[0] (same clock as BeatEventPayload.hostTimeMs). */
++    startHostMs: number;
++};
+ export type ExpoPrecisionMetronomeModuleEvents = {
+     onBeat: (params: BeatEventPayload) => void;
+     onStop: (params: StopEventPayload) => void;
++    onOnset: (params: OnsetEventPayload) => void;
+ };
+ //# sourceMappingURL=ExpoPrecisionMetronome.types.d.ts.map
+\ No newline at end of file
 diff --git a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
-index 9ee05f7..425f663 100644
+index 9ee05f7..0001ec4 100644
 --- a/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
 +++ b/node_modules/expo-precision-metronome/build/ExpoPrecisionMetronomeModule.d.ts
-@@ -6,6 +6,9 @@ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMet
+@@ -1,11 +1,20 @@
+ import { NativeModule } from "expo";
+-import { BeatAccent, ExpoPrecisionMetronomeModuleEvents, SoundPreset } from "./ExpoPrecisionMetronome.types";
++import { BeatAccent, CaptureEnvelope, ExpoPrecisionMetronomeModuleEvents, SoundPreset } from "./ExpoPrecisionMetronome.types";
+ declare class ExpoPrecisionMetronomeModule extends NativeModule<ExpoPrecisionMetronomeModuleEvents> {
+     start(bpm: number): Promise<void>;
+     stop(): Promise<void>;
      setBpm(bpm: number): Promise<void>;
      setSound(sound: SoundPreset): Promise<void>;
      setPattern(pattern: BeatAccent[]): Promise<void>;
 +    playTapClick(): Promise<void>;
 +    playPerfectClick(): Promise<void>;
 +    getOutputLatencyMs(): Promise<number>;
++    /** iOS only. Installs a mic tap on the running engine and starts emitting `onOnset` events. Caller must have mic permission + a .playAndRecord session. No-op on Android/web. */
++    startOnsetDetection(): Promise<void>;
++    /** iOS only. Removes the mic tap. No-op on Android/web. */
++    stopOnsetDetection(): Promise<void>;
++    /** iOS only. Decimated RMS envelope of the last mic capture, read once at teardown. Empty on Android/web. */
++    getCaptureEnvelope(): Promise<CaptureEnvelope>;
  }
  declare const _default: ExpoPrecisionMetronomeModule;
  export default _default;
@@ -112,10 +178,41 @@ index a9509d4..b71665f 100644
          _ ctx: RenderContext,
          freq1: Double,
 diff --git a/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift b/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
-index f0e30dc..73b4b9a 100644
+index f0e30dc..69ce811 100644
 --- a/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
 +++ b/node_modules/expo-precision-metronome/ios/ExpoPrecisionMetronomeModule.swift
-@@ -57,5 +57,28 @@ public class ExpoPrecisionMetronomeModule: Module {
+@@ -12,15 +12,26 @@ public class ExpoPrecisionMetronomeModule: Module {
+     public func definition() -> ModuleDefinition {
+         Name("ExpoPrecisionMetronome")
+ 
+-        Events("onBeat", "onStop")
++        Events("onBeat", "onStop", "onOnset")
+ 
+         OnCreate {
+             let eng = MetronomeEngine()
+-            eng.beatHandler = { [weak self] beat, timestamp, accent in
+-                self?.sendEvent("onBeat", ["beat": beat, "timestamp": timestamp, "accent": accent])
++            eng.beatHandler = { [weak self] beat, timestamp, hostTimeMs, accent in
++                let payload: [String: Any] = [
++                    "beat": beat,
++                    "timestamp": timestamp,
++                    "hostTimeMs": hostTimeMs,
++                    "accent": accent,
++                ]
++                self?.sendEvent("onBeat", payload)
+             }
+             eng.stopHandler = { [weak self] reason in
+-                self?.sendEvent("onStop", ["reason": reason])
++                let payload: [String: Any] = ["reason": reason as Any]
++                self?.sendEvent("onStop", payload)
++            }
++            eng.onsetHandler = { [weak self] hostTimeMs, strength in
++                let payload: [String: Any] = ["hostTimeMs": hostTimeMs, "strength": strength]
++                self?.sendEvent("onOnset", payload)
+             }
+             self.engine = eng
+         }
+@@ -57,5 +68,56 @@ public class ExpoPrecisionMetronomeModule: Module {
          AsyncFunction("setPattern") { (pattern: [BeatAccent]) in
              self.engine?.setPattern(pattern)
          }
@@ -142,13 +239,70 @@ index f0e30dc..73b4b9a 100644
 +        AsyncFunction("getOutputLatencyMs") { () -> Double in
 +            self.engine?.outputLatencyMs() ?? 0
 +        }
++
++        // Installs a mic tap on the running engine and starts emitting
++        // `onOnset` events (spectral-flux onset detection, see
++        // OnsetDetector). The caller must have already put the audio
++        // session into .playAndRecord and obtained mic permission. No-op
++        // if the engine isn't running.
++        AsyncFunction("startOnsetDetection") {
++            self.engine?.startOnsetDetection()
++        }
++
++        AsyncFunction("stopOnsetDetection") {
++            self.engine?.stopOnsetDetection()
++        }
++
++        // Decimated RMS envelope of the whole capture, for the report's
++        // static waveform. Read once at teardown. `hopMs` is the time each
++        // value covers; `startHostMs` is host-time ms of value 0 (same
++        // clock as onBeat.hostTimeMs / onOnset.hostTimeMs).
++        AsyncFunction("getCaptureEnvelope") { () -> [String: Any] in
++            let snap: (values: [Float], hopMs: Double, startHostMs: Double) =
++                self.engine?.captureEnvelope() ?? (values: [], hopMs: 0, startHostMs: 0)
++            let payload: [String: Any] = [
++                "values": snap.values,
++                "hopMs": snap.hopMs,
++                "startHostMs": snap.startHostMs,
++            ]
++            return payload
++        }
      }
  }
 diff --git a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
-index 84cec22..6676723 100644
+index 84cec22..73834cc 100644
 --- a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
 +++ b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
-@@ -18,6 +18,45 @@ final class MetronomeEngine {
+@@ -1,14 +1,26 @@
+ import AVFoundation
+ 
+ final class MetronomeEngine {
+-    // All three handlers are dispatched on the main thread.
+-    var beatHandler: ((_ beat: Int, _ timestamp: Double, _ accent: String) -> Void)?
++    // All handlers are dispatched on the main thread.
++    // `hostTimeMs` is AVAudioTime host-time in ms (see AVAudioTime.seconds(forHostTime:)),
++    // the same clock OnsetDetector stamps every onset with — so JS can align
++    // an onset against beat 1 without any Date.now() dispatch jitter.
++    var beatHandler: ((_ beat: Int, _ timestamp: Double, _ hostTimeMs: Double, _ accent: String) -> Void)?
+     var stopHandler: ((_ reason: String) -> Void)?
++    var onsetHandler: ((_ hostTimeMs: Double, _ strength: Double) -> Void)?
+ 
+     private var engine: AVAudioEngine?
+     private var sourceNode: AVAudioSourceNode?
+     private let scheduler = BeatScheduler()
+ 
++    // Mic-input onset detection (see startOnsetDetection). The tap is
++    // installed on the *same* engine that renders the click, so there's
++    // only ever one AVAudioEngine / audio session — a second engine
++    // fighting this one over the session is what broke playback the last
++    // time mic capture was attempted from JS.
++    private let onsetDetector = OnsetDetector()
++    private var onsetDetectionActive = false
++
+     // Accessed exclusively from the audio render thread after start().
+     private var sampleRate: Double = 44_100
+     private var currentSample: Int64 = 0
+@@ -18,6 +30,45 @@ final class MetronomeEngine {
      // Accent params captured at click onset; used for multi-buffer continuation.
      private var clickAccent: ClickSynthesizer.AccentParams = .normal
  
@@ -194,7 +348,7 @@ index 84cec22..6676723 100644
      // Written from the JS thread, read from the audio render thread.
      // On ARM64 (all iOS devices), an aligned 8-byte load/store is a single LDR/STR —
      // hardware-atomic, no torn reads possible. No synchronisation primitive needed.
-@@ -55,10 +94,39 @@ final class MetronomeEngine {
+@@ -55,10 +106,127 @@ final class MetronomeEngine {
          currentPatternEncoded = MetronomeEngine.encode(pattern)
      }
  
@@ -227,15 +381,103 @@ index 84cec22..6676723 100644
 +        return AVAudioSession.sharedInstance().outputLatency * 1000
 +    }
 +
++    // MARK: - Mic onset detection
++
++    // Installs a mic tap on the running engine's input node and starts
++    // feeding it to OnsetDetector. The caller (JS) is responsible for having
++    // already put the audio session into .playAndRecord *before* the engine
++    // itself was started (see app/index.tsx's togglePlay, which awaits
++    // setAudioModeAsync before calling start()) — not just before this call.
++    // A no-op if the engine isn't running or capture is already active.
++    func startOnsetDetection() {
++        guard engine != nil, !onsetDetectionActive else { return }
++        // Hop to main before touching anything engine-related (see the
++        // class-level threading note on handleConfigurationChange) — this
++        // AsyncFunction call can land on a background queue.
++        DispatchQueue.main.async { [weak self] in
++            self?.attemptArmOnsetTap(retriesLeft: 6)
++        }
++    }
++
++    // inputNode.inputFormat(forBus:) can still read as sampleRate=0 for a
++    // few tens of ms right after the engine starts even though the session
++    // is already genuinely .playAndRecord — the HAL hasn't finished
++    // provisioning the input side yet. Retrying briefly (well inside the
++    // lead-in beat's slack at any real-world tempo) is a *non-destructive*
++    // wait for that to settle — it never tears down or touches the running
++    // engine, so it can't kill playback the way an earlier version of this
++    // fix (rebuilding the engine synchronously here) reliably did on a real
++    // device. relaunch() is only reached as a genuine last resort, if the
++    // format still isn't valid after waiting ~300ms.
++    private func attemptArmOnsetTap(retriesLeft: Int) {
++        guard let engine, !onsetDetectionActive else {
++            NSLog("[Metronome] attemptArmOnsetTap early-return (engine nil or already active), retriesLeft=%d", retriesLeft)
++            return
++        }
++        let format = engine.inputNode.inputFormat(forBus: 0)
++        NSLog("[Metronome] attemptArmOnsetTap retriesLeft=%d sampleRate=%f channels=%d",
++              retriesLeft, format.sampleRate, format.channelCount)
++        if format.sampleRate > 0, format.channelCount > 0 {
++            armOnsetTap()
++            return
++        }
++        if retriesLeft > 0 {
++            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
++                self?.attemptArmOnsetTap(retriesLeft: retriesLeft - 1)
++            }
++            return
++        }
++        NSLog("[Metronome] attemptArmOnsetTap giving up, forcing relaunch")
++        relaunch()
++        armOnsetTap()
++    }
++
++    private func armOnsetTap() {
++        guard let engine, !onsetDetectionActive else { return }
++
++        let input = engine.inputNode
++        let format = input.inputFormat(forBus: 0)
++        guard format.sampleRate > 0, format.channelCount > 0 else {
++            NSLog("[Metronome] armOnsetTap bail: invalid format sampleRate=%f channels=%d", format.sampleRate, format.channelCount)
++            return
++        }
++
++        onsetDetector.configure(sampleRate: format.sampleRate)
++        onsetDetector.onsetHandler = { [weak self] hostTimeMs, strength in
++            DispatchQueue.main.async { self?.onsetHandler?(hostTimeMs, strength) }
++        }
++
++        input.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, when in
++            self?.onsetDetector.process(buffer: buffer, when: when)
++        }
++        onsetDetectionActive = true
++        NSLog("[Metronome] armOnsetTap installed tap, sampleRate=%f channels=%d", format.sampleRate, format.channelCount)
++    }
++
++    func stopOnsetDetection() {
++        guard onsetDetectionActive else { return }
++        engine?.inputNode.removeTap(onBus: 0)
++        onsetDetector.onsetHandler = nil
++        onsetDetectionActive = false
++    }
++
++    // Decimated RMS envelope of the whole capture, for the report's static
++    // waveform. Read once at teardown.
++    func captureEnvelope() -> (values: [Float], hopMs: Double, startHostMs: Double) {
++        return onsetDetector.snapshotEnvelope()
++    }
++
      /// `reason: nil` suppresses the onStop event — used by OnDestroy where JS is gone.
      func stop(reason: String?) {
          guard let eng = engine else { return }
 -        removeInterruptionObserver()
++        NSLog("[Metronome] stop(reason: %@) called", reason ?? "nil")
 +        removeObservers()
++        stopOnsetDetection()
          eng.stop()
          sourceNode = nil
          engine = nil
-@@ -105,6 +173,12 @@ final class MetronomeEngine {
+@@ -105,6 +273,12 @@ final class MetronomeEngine {
          sampleRate = sr
          currentSample = 0
          clickPhase = -1
@@ -248,7 +490,20 @@ index 84cec22..6676723 100644
          scheduler.reset()
  
          guard let format = AVAudioFormat(standardFormatWithSampleRate: sr, channels: 1) else {
-@@ -121,14 +195,46 @@ final class MetronomeEngine {
+@@ -114,21 +288,87 @@ final class MetronomeEngine {
+                 userInfo: [NSLocalizedDescriptionKey: "Failed to create audio format for sample rate \(sr)"]
+             )
+         }
+-        let node = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList in
+-            self?.renderCallback(frameCount: Int(frameCount), audioBufferList: audioBufferList) ?? noErr
++        let node = AVAudioSourceNode(format: format) { [weak self] _, timestamp, frameCount, audioBufferList in
++            self?.renderCallback(
++                timestamp: timestamp,
++                frameCount: Int(frameCount),
++                audioBufferList: audioBufferList
++            ) ?? noErr
+         }
+ 
          newEngine.attach(node)
          newEngine.connect(node, to: newEngine.mainMixerNode, format: format)
  
@@ -268,6 +523,20 @@ index 84cec22..6676723 100644
 +            try session.setCategory(.playback, mode: .default)
 +        }
 +        try session.setActive(true)
++
++        // Touch inputNode *before* start() even when this session doesn't
++        // need mic capture yet. Confirmed on-device: if the engine is
++        // started without ever referencing inputNode first, it locks in an
++        // output-only configuration — later accessing inputNode (from
++        // startOnsetDetection) keeps reporting sampleRate=0/an unusable
++        // format no matter how long you wait (retried for 300ms, every
++        // single time, never recovered on its own); only a full stop+
++        // restart fixed it, which is audibly disruptive and resets the
++        // beat scheduler mid-session. Referencing it here costs nothing and
++        // makes the engine provision both directions from the start, so
++        // startOnsetDetection's later access just works.
++        _ = newEngine.inputNode
++
          try newEngine.start()
  
          sourceNode = node
@@ -283,14 +552,30 @@ index 84cec22..6676723 100644
 +    // and sample counters reset), just without tearing down the
 +    // AVAudioSession or telling JS anything stopped.
 +    private func relaunch() {
-+        guard let oldEngine = engine else { return }
++        NSLog("[Metronome] relaunch() called, thread=%@ isMain=%d", Thread.current.description, Thread.isMainThread)
++        guard let oldEngine = engine else {
++            NSLog("[Metronome] relaunch() early-return, no engine")
++            return
++        }
++        let wasCapturing = onsetDetectionActive
 +        removeObservers()
++        stopOnsetDetection()
 +        oldEngine.stop()
 +        sourceNode = nil
 +        engine = nil
 +        do {
 +            try launchEngine()
++            NSLog("[Metronome] relaunch() launchEngine succeeded")
++            // Re-arm the mic tap on the fresh graph. The detector resets
++            // its own state (a route change is disruptive enough that
++            // dropping the pre-change envelope/history is acceptable).
++            // armOnsetTap() directly, not startOnsetDetection() — the format
++            // is already fresh off the graph just rebuilt, and going
++            // through startOnsetDetection() here would re-enter relaunch()
++            // if it somehow still weren't valid.
++            if wasCapturing { armOnsetTap() }
 +        } catch {
++            NSLog("[Metronome] relaunch() launchEngine FAILED: %@", String(describing: error))
 +            // Couldn't recover — tell JS so it doesn't sit frozen thinking
 +            // playback is still going.
 +            stopHandler?("interruption")
@@ -298,7 +583,7 @@ index 84cec22..6676723 100644
      }
  
      private func renderOngoingClick(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
-@@ -148,6 +254,78 @@ final class MetronomeEngine {
+@@ -148,7 +388,80 @@ final class MetronomeEngine {
          if clickPhase >= clickDurationSamples { clickPhase = -1 }
      }
  
@@ -375,18 +660,57 @@ index 84cec22..6676723 100644
 +    }
 +
      private func renderCallback(
++        timestamp: UnsafePointer<AudioTimeStamp>,
          frameCount: Int,
          audioBufferList: UnsafeMutablePointer<AudioBufferList>
-@@ -162,6 +340,8 @@ final class MetronomeEngine {
+     ) -> OSStatus {
+@@ -161,7 +474,18 @@ final class MetronomeEngine {
+         let bpm = currentBPM
          let bufferStart = currentSample
  
++        // Host time of this buffer's first frame — the shared clock beats
++        // and mic onsets are both stamped against (see beatHandler /
++        // OnsetDetector). mHostTime is valid on AVAudioSourceNode in
++        // practice; fall back to "now" if a platform ever leaves it unset.
++        let ts = timestamp.pointee
++        let bufferHostTime = (ts.mFlags.contains(.hostTimeValid) && ts.mHostTime != 0)
++            ? ts.mHostTime
++            : mach_absolute_time()
++
          renderOngoingClick(into: buffer, frameCount: frameCount)
 +        renderTapClick(into: buffer, frameCount: frameCount)
 +        renderPerfectClick(into: buffer, frameCount: frameCount)
  
          if let (offset, beatNumber) = scheduler.nextBeat(
              frameCount: frameCount,
-@@ -199,23 +379,41 @@ final class MetronomeEngine {
+@@ -188,10 +512,25 @@ final class MetronomeEngine {
+             clickAccent = ap
+             clickPhase = toWrite < dur ? toWrite : -1
+ 
++            let offsetTicks = AVAudioTime.hostTime(forSeconds: Double(offset) / sampleRate)
++            let beatHostTime = bufferHostTime &+ offsetTicks
++            let beatHostMs = AVAudioTime.seconds(forHostTime: beatHostTime) * 1_000
++
++            // Gate the mic onset detector across this click's own bleed —
++            // sample-accurate, so it only needs to cover the click's real
++            // duration (+ a short acoustic-path slack added inside the
++            // detector), not a wide fixed window. Only the beat click
++            // matters here; the tap/perfect clicks only ever fire in tap
++            // mode, where nothing is listening.
++            if onsetDetectionActive {
++                let clickDurTicks = AVAudioTime.hostTime(forSeconds: Double(dur) / sampleRate)
++                onsetDetector.addClickGate(endHostTime: beatHostTime &+ clickDurTicks)
++            }
++
+             let beatTimestamp = Double(bufferStart + Int64(offset)) / sampleRate
+             let accentName = accent.rawValue
+             DispatchQueue.main.async { [weak self] in
+-                self?.beatHandler?(beatNumber, beatTimestamp, accentName)
++                self?.beatHandler?(beatNumber, beatTimestamp, beatHostMs, accentName)
+             }
+         }
+ 
+@@ -199,37 +538,85 @@ final class MetronomeEngine {
          return noErr
      }
  
@@ -431,20 +755,514 @@ index 84cec22..6676723 100644
      }
  
      @objc private func handleInterruption(_ notification: Notification) {
-@@ -229,7 +427,15 @@ final class MetronomeEngine {
-         stop(reason: "interruption")
-     }
+         guard
+             let info = notification.userInfo,
+             let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+-            let type = AVAudioSession.InterruptionType(rawValue: typeValue),
+-            type == .began
+-        else { return }
++            let type = AVAudioSession.InterruptionType(rawValue: typeValue)
++        else {
++            NSLog("[Metronome] handleInterruption: no parsable type in notification")
++            return
++        }
++        NSLog("[Metronome] handleInterruption type=%@", type == .began ? "began" : "ended")
++
++        // Used to stop unconditionally on *any* .began — but not every
++        // .began is a real interruption (a phone call, Siri, another app
++        // grabbing audio). The system can also emit one when *our own*
++        // session gets reconfigured (e.g. the category flip to
++        // .playAndRecord right before this engine starts) even though
++        // nothing actually needs to stop. Killing the engine permanently on
++        // every one of those meant the metronome could silently die right
++        // at the mic pipeline's own startup. Now: only treat it as fatal
++        // once the interruption actually *ends* and the system tells us
++        // playback shouldn't resume — matching Apple's own recommended
++        // pattern (AVAudioSessionInterruptionOptionKey / .shouldResume).
++        guard type == .ended else { return }
++
++        let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
++        let shouldResume = AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume)
++        NSLog("[Metronome] handleInterruption ended, shouldResume=%d", shouldResume)
++        if !shouldResume {
++            stop(reason: "interruption")
++        }
++    }
  
+-        stop(reason: "interruption")
 +    // Posted on an unspecified thread — hop to main before touching engine/
 +    // sourceNode, which are otherwise only ever written from the main thread.
 +    @objc private func handleConfigurationChange(_ notification: Notification) {
++        NSLog("[Metronome] handleConfigurationChange received")
 +        DispatchQueue.main.async { [weak self] in
 +            self?.relaunch()
 +        }
-+    }
-+
+     }
+ 
      deinit {
 -        removeInterruptionObserver()
 +        removeObservers()
      }
  }
+diff --git a/node_modules/expo-precision-metronome/ios/OnsetDetector.swift b/node_modules/expo-precision-metronome/ios/OnsetDetector.swift
+new file mode 100644
+index 0000000..4aebd34
+--- /dev/null
++++ b/node_modules/expo-precision-metronome/ios/OnsetDetector.swift
+@@ -0,0 +1,456 @@
++import Accelerate
++import AVFoundation
++
++// Real-time onset detector fed by a mic input tap on the same AVAudioEngine
++// the metronome renders its click through (see MetronomeEngine's
++// startOnsetDetection). Replaces the app's previous JS pipeline, which only
++// ever saw a single broadband `metering` dB value polled every 20ms and
++// decimated into 50ms buckets — far too coarse to separate two hits closer
++// than ~80ms (e.g. consecutive sixteenth notes) or to reject the click
++// without blanking a big window around every beat.
++//
++// Technique: short-time spectral flux.
++//   - 512-sample Hann-windowed frames, hop 128 (~2.7ms at 48kHz), real FFT
++//     via vDSP.
++//   - Flux = sum of positive bin-to-bin magnitude increases, restricted to
++//     a ~200Hz–8kHz band (rumble/DC and the very top octave carry mostly
++//     noise, not attack energy — this, and only this, is where "ignore some
++//     frequencies" actually helps).
++//   - Adaptive threshold: rolling mean + k·stddev of recent flux.
++//   - A frame is an onset when its flux clears the threshold, is a local
++//     maximum, and sits at least `refractorySamples` past the previous
++//     onset (so a decaying first hit can't retrigger, while a genuine
++//     second hit ~60ms later still can).
++//
++// Click rejection is sample-accurate, not heuristic: MetronomeEngine knows
++// the exact output host-time of every click it renders and pushes a short
++// gate window (addClickGate) covering the click plus its speaker→mic
++// bleed. Frames inside a gate never emit an onset and don't update the
++// flux history, and the spectral difference is reseeded on the first frame
++// after the gate so the click's edge doesn't surface as a phantom onset.
++//
++// All onset/envelope timestamps are AVAudioTime host-time (ms), the same
++// clock MetronomeEngine now stamps every onBeat with — so JS can line an
++// onset up against beat 1 with no Date.now() dispatch jitter in the path.
++final class OnsetDetector {
++    // MARK: - Tunables
++
++    private static let fftSize = 512
++    private static let hopSize = 128
++    private static let log2n: vDSP_Length = 9  // 2^9 == fftSize
++
++    // Flux band, Hz. Below ~200Hz is handling/rumble and room boom; above
++    // ~8kHz is mostly hiss with little attack information. Widen the top if
++    // brushes/hi-hats read as too weak; raise the bottom if a boomy room
++    // still triggers.
++    private static let bandLoHz: Double = 200
++    private static let bandHiHz: Double = 8_000
++
++    // Rolling window (frames) the adaptive threshold's mean/stddev are
++    // computed over — ~250ms at the hop above. Long enough to be a stable
++    // noise-floor estimate, short enough to track a real crescendo.
++    private static let fluxHistoryFrames = 90
++
++    // Threshold = mean + thresholdK · stddev, floored at thresholdFloor
++    // (absolute, so a dead-silent room can't drive the threshold to ~0 and
++    // fire on nothing). Raise thresholdK if quiet background noise trips it;
++    // lower it if soft hits are missed.
++    private static let thresholdK: Float = 1.6
++    private static let thresholdFloor: Float = 0.004
++
++    // Minimum spacing between two onsets. 55ms still resolves four
++    // consecutive sixteenths up to ~270 BPM (sixteenth = 55ms there); a
++    // real second hit is essentially never closer than this.
++    private static let refractorySeconds: Double = 0.055
++
++    // A candidate onset "closes" (and emits, at its loudest frame) once the
++    // flux has fallen back to this fraction of that peak, or below the
++    // threshold — whichever first.
++    private static let peakReleaseRatio: Float = 0.6
++
++    // Extra host-time slack added past a click's own duration when gating,
++    // to cover the speaker→mic acoustic path and the click's short decay
++    // tail leaking into the mic (near-zero with headphones).
++    private static let clickGateSlackSeconds: Double = 0.012
++
++    // MARK: - Output
++
++    // hostTimeMs, strength(0..1). Always dispatched on the main thread by
++    // the owner (see MetronomeEngine).
++    var onsetHandler: ((_ hostTimeMs: Double, _ strength: Double) -> Void)?
++
++    // MARK: - FFT / window state
++
++    private let fftSetup: FFTSetup
++    private var hann = [Float](repeating: 0, count: OnsetDetector.fftSize)
++    private var windowed = [Float](repeating: 0, count: OnsetDetector.fftSize)
++    private var realp = [Float](repeating: 0, count: OnsetDetector.fftSize / 2)
++    private var imagp = [Float](repeating: 0, count: OnsetDetector.fftSize / 2)
++    private var magnitudes = [Float](repeating: 0, count: OnsetDetector.fftSize / 2)
++    private var prevMagnitudes = [Float](repeating: 0, count: OnsetDetector.fftSize / 2)
++    private var reseedSpectrum = true
++
++    private var sampleRate: Double = 48_000
++    private var bandLoBin = 1
++    private var bandHiBin = 2
++    private var refractorySamples: Int64 = 2_640
++    private var latencyCompensationSamples: Int64 = 0
++    private var envelopeHop = 240
++
++    // MARK: - Streaming input state
++
++    // Samples not yet consumed by a full hop. Absolute index of pending[0]
++    // is `pendingStartSample`.
++    private var pending = [Float]()
++    private var pendingStartSample: Int64 = 0
++    private var totalInputSamples: Int64 = 0
++
++    // Sample-index -> host-time anchor, refreshed from every tap buffer's
++    // AVAudioTime. hostSeconds(for: s) = anchorHostSeconds + (s - anchorSample) / sampleRate.
++    private var anchorSample: Int64 = 0
++    private var anchorHostSeconds: Double = 0
++    private var haveAnchor = false
++
++    // MARK: - Flux history (ring)
++
++    private var fluxHistory = [Float](repeating: 0, count: OnsetDetector.fluxHistoryFrames)
++    private var fluxHistoryFill = 0
++    private var fluxHistoryHead = 0
++
++    // MARK: - Onset state machine
++
++    private var inCandidate = false
++    private var candidatePeakFlux: Float = 0
++    private var candidatePeakSample: Int64 = 0
++    private var candidateThresholdAtPeak: Float = 1
++    private var lastOnsetSample: Int64 = Int64.min / 2
++
++    // MARK: - Click gates (host-time seconds)
++
++    private var gateEndSeconds = [Double]()
++    private let gateLock = NSLock()
++
++    // MARK: - Envelope capture
++
++    private var envelope = [Float]()
++    private var envelopeAccum: Float = 0
++    private var envelopeAccumCount = 0
++    private var envelopeStartHostMs: Double = 0
++    private var envelopeStarted = false
++    private let envelopeLock = NSLock()
++
++    // MARK: - Lifecycle
++
++    init() {
++        guard let setup = vDSP_create_fftsetup(OnsetDetector.log2n, FFTRadix(kFFTRadix2)) else {
++            fatalError("OnsetDetector: vDSP_create_fftsetup failed")
++        }
++        fftSetup = setup
++
++        let denom = Float(OnsetDetector.fftSize - 1)
++        for i in 0..<OnsetDetector.fftSize {
++            hann[i] = 0.5 - 0.5 * cos(2.0 * Float.pi * Float(i) / denom)
++        }
++    }
++
++    deinit {
++        vDSP_destroy_fftsetup(fftSetup)
++    }
++
++    // Called once from startOnsetDetection with the live input format, so
++    // every sample-domain constant is computed against the real hardware
++    // rate rather than the 48kHz placeholder above.
++    func configure(sampleRate: Double) {
++        self.sampleRate = sampleRate > 0 ? sampleRate : 48_000
++
++        let binHz = self.sampleRate / Double(OnsetDetector.fftSize)
++        bandLoBin = max(1, Int((OnsetDetector.bandLoHz / binHz).rounded(.down)))
++        bandHiBin = min(OnsetDetector.fftSize / 2 - 1,
++                        Int((OnsetDetector.bandHiHz / binHz).rounded(.up)))
++        if bandHiBin <= bandLoBin { bandHiBin = bandLoBin + 1 }
++
++        refractorySamples = Int64(OnsetDetector.refractorySeconds * self.sampleRate)
++        envelopeHop = max(64, Int(self.sampleRate * 0.005))  // ~5ms per report-waveform bucket
++
++        // Round-trip compensation so a hit the player *hears* land on the
++        // click reports ~0ms: subtract output+input latency (the click is
++        // heard `outputLatency` after its render host-time; the mic captures
++        // the reaction `inputLatency` after it happens) plus half the STFT
++        // window (energy is reported at the window centre).
++        let session = AVAudioSession.sharedInstance()
++        let latencySeconds = session.outputLatency + session.inputLatency
++        latencyCompensationSamples =
++            Int64(latencySeconds * self.sampleRate) + Int64(OnsetDetector.fftSize / 2)
++
++        reset()
++    }
++
++    func reset() {
++        pending.removeAll(keepingCapacity: true)
++        pendingStartSample = 0
++        totalInputSamples = 0
++        haveAnchor = false
++        anchorSample = 0
++        anchorHostSeconds = 0
++
++        for i in 0..<prevMagnitudes.count { prevMagnitudes[i] = 0 }
++        reseedSpectrum = true
++
++        fluxHistoryFill = 0
++        fluxHistoryHead = 0
++
++        inCandidate = false
++        candidatePeakFlux = 0
++        candidatePeakSample = 0
++        lastOnsetSample = Int64.min / 2
++
++        gateLock.lock()
++        gateEndSeconds.removeAll(keepingCapacity: true)
++        gateLock.unlock()
++
++        envelopeLock.lock()
++        envelope.removeAll(keepingCapacity: true)
++        envelopeAccum = 0
++        envelopeAccumCount = 0
++        envelopeStarted = false
++        envelopeStartHostMs = 0
++        envelopeLock.unlock()
++    }
++
++    // MARK: - Click gating (called from the audio render thread)
++
++    // `endHostTime` is the host time the click's audible tail is fully done
++    // — MetronomeEngine passes the click's render host-time plus its
++    // duration; the acoustic-path slack is added here.
++    func addClickGate(endHostTime: UInt64) {
++        let endSeconds = AVAudioTime.seconds(forHostTime: endHostTime)
++            + OnsetDetector.clickGateSlackSeconds
++        gateLock.lock()
++        gateEndSeconds.append(endSeconds)
++        // Keep it tiny — a handful of clicks per bar at most.
++        if gateEndSeconds.count > 16 { gateEndSeconds.removeFirst(gateEndSeconds.count - 16) }
++        gateLock.unlock()
++    }
++
++    private func isGated(hostSeconds: Double) -> Bool {
++        gateLock.lock()
++        defer { gateLock.unlock() }
++        if gateEndSeconds.isEmpty { return false }
++        gateEndSeconds.removeAll { $0 < hostSeconds - 0.5 }
++        for end in gateEndSeconds where hostSeconds <= end {
++            // A gate covers roughly [end - 0.1, end]; clicks are short and
++            // we only ever add near-future ends, so treating "before this
++            // end and within 100ms of it" as gated is enough.
++            if hostSeconds >= end - 0.1 { return true }
++        }
++        return false
++    }
++
++    // MARK: - Tap ingestion (called from the input tap's serial queue)
++
++    func process(buffer: AVAudioPCMBuffer, when: AVAudioTime) {
++        guard let channelData = buffer.floatChannelData else { return }
++        let frameLength = Int(buffer.frameLength)
++        guard frameLength > 0 else { return }
++
++        // Mono: channel 0 only (the app never records multi-channel).
++        let samples = channelData[0]
++
++        // Refresh the sample->host-time anchor from this buffer.
++        let bufferHostSeconds: Double
++        if when.isHostTimeValid {
++            bufferHostSeconds = AVAudioTime.seconds(forHostTime: when.hostTime)
++        } else {
++            bufferHostSeconds = AVAudioTime.seconds(forHostTime: mach_absolute_time())
++                - Double(frameLength) / sampleRate
++        }
++        anchorSample = totalInputSamples
++        anchorHostSeconds = bufferHostSeconds
++        haveAnchor = true
++
++        if !envelopeStarted {
++            envelopeLock.lock()
++            envelopeStarted = true
++            envelopeStartHostMs = bufferHostSeconds * 1_000
++            envelopeLock.unlock()
++        }
++
++        if pending.isEmpty {
++            pendingStartSample = totalInputSamples
++        }
++        pending.reserveCapacity(pending.count + frameLength)
++        for i in 0..<frameLength {
++            pending.append(samples[i])
++        }
++        totalInputSamples += Int64(frameLength)
++
++        accumulateEnvelope(samples: samples, count: frameLength)
++        drainHops()
++    }
++
++    private func hostSeconds(forSample s: Int64) -> Double {
++        anchorHostSeconds + Double(s - anchorSample) / sampleRate
++    }
++
++    // MARK: - Envelope
++
++    private func accumulateEnvelope(samples: UnsafePointer<Float>, count: Int) {
++        for i in 0..<count {
++            let v = samples[i]
++            envelopeAccum += v * v
++            envelopeAccumCount += 1
++            if envelopeAccumCount >= envelopeHop {
++                let rms = (envelopeAccum / Float(envelopeAccumCount)).squareRoot()
++                envelopeLock.lock()
++                envelope.append(rms)
++                envelopeLock.unlock()
++                envelopeAccum = 0
++                envelopeAccumCount = 0
++            }
++        }
++    }
++
++    // hopMs matches envelopeHop; startOffsetMs is host-time ms of bucket 0.
++    func snapshotEnvelope() -> (values: [Float], hopMs: Double, startHostMs: Double) {
++        envelopeLock.lock()
++        defer { envelopeLock.unlock() }
++        return (envelope, Double(envelopeHop) / sampleRate * 1_000, envelopeStartHostMs)
++    }
++
++    // MARK: - Frame processing
++
++    private func drainHops() {
++        let fftSize = OnsetDetector.fftSize
++        let hopSize = OnsetDetector.hopSize
++
++        var consumed = 0
++        while pending.count - consumed >= fftSize {
++            let frameStartAbs = pendingStartSample + Int64(consumed)
++            processFrame(frameStart: consumed, frameStartAbs: frameStartAbs)
++            consumed += hopSize
++        }
++        if consumed > 0 {
++            pending.removeFirst(consumed)
++            pendingStartSample += Int64(consumed)
++        }
++    }
++
++    private func processFrame(frameStart: Int, frameStartAbs: Int64) {
++        let fftSize = OnsetDetector.fftSize
++        let half = fftSize / 2
++
++        pending.withUnsafeBufferPointer { buf in
++            let base = buf.baseAddress! + frameStart
++            vDSP_vmul(base, 1, hann, 1, &windowed, 1, vDSP_Length(fftSize))
++        }
++
++        realp.withUnsafeMutableBufferPointer { rp in
++            imagp.withUnsafeMutableBufferPointer { ip in
++                var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
++                windowed.withUnsafeBufferPointer { wp in
++                    wp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { cp in
++                        vDSP_ctoz(cp, 2, &split, 1, vDSP_Length(half))
++                    }
++                }
++                vDSP_fft_zrip(fftSetup, &split, 1, OnsetDetector.log2n, FFTDirection(FFT_FORWARD))
++                vDSP_zvabs(&split, 1, &magnitudes, 1, vDSP_Length(half))
++            }
++        }
++
++        // Representative host-time of this frame's centre.
++        let centreSample = frameStartAbs + Int64(half) - latencyCompensationSamples
++        let gated = isGated(hostSeconds: hostSeconds(forSample: frameStartAbs + Int64(half)))
++
++        if reseedSpectrum {
++            for i in 0..<half { prevMagnitudes[i] = magnitudes[i] }
++            reseedSpectrum = false
++            return
++        }
++
++        if gated {
++            // Don't measure flux across the click's edge or let it pollute
++            // the noise-floor estimate; resync the spectrum for next frame.
++            for i in 0..<half { prevMagnitudes[i] = magnitudes[i] }
++            // Abandon any candidate that was mid-rise when the click hit.
++            inCandidate = false
++            return
++        }
++
++        var flux: Float = 0
++        for k in bandLoBin...bandHiBin {
++            let d = magnitudes[k] - prevMagnitudes[k]
++            if d > 0 { flux += d }
++        }
++        flux /= Float(bandHiBin - bandLoBin + 1)
++        for i in 0..<half { prevMagnitudes[i] = magnitudes[i] }
++
++        let threshold = currentThreshold()
++        pushFlux(flux)
++
++        detectOnset(flux: flux, threshold: threshold, frameSample: centreSample)
++    }
++
++    private func pushFlux(_ flux: Float) {
++        fluxHistory[fluxHistoryHead] = flux
++        fluxHistoryHead = (fluxHistoryHead + 1) % fluxHistory.count
++        if fluxHistoryFill < fluxHistory.count { fluxHistoryFill += 1 }
++    }
++
++    private func currentThreshold() -> Float {
++        guard fluxHistoryFill > 0 else { return OnsetDetector.thresholdFloor }
++        var mean: Float = 0
++        for i in 0..<fluxHistoryFill { mean += fluxHistory[i] }
++        mean /= Float(fluxHistoryFill)
++        var variance: Float = 0
++        for i in 0..<fluxHistoryFill {
++            let d = fluxHistory[i] - mean
++            variance += d * d
++        }
++        variance /= Float(fluxHistoryFill)
++        let std = variance.squareRoot()
++        return max(OnsetDetector.thresholdFloor, mean + OnsetDetector.thresholdK * std)
++    }
++
++    private func detectOnset(flux: Float, threshold: Float, frameSample: Int64) {
++        if !inCandidate {
++            guard flux > threshold,
++                  frameSample - lastOnsetSample > refractorySamples else { return }
++            inCandidate = true
++            candidatePeakFlux = flux
++            candidatePeakSample = frameSample
++            candidateThresholdAtPeak = threshold
++            return
++        }
++
++        if flux > candidatePeakFlux {
++            candidatePeakFlux = flux
++            candidatePeakSample = frameSample
++            candidateThresholdAtPeak = threshold
++            return
++        }
++
++        // Falling — close the candidate once it has clearly come down off
++        // its peak (or dropped back under threshold).
++        if flux < candidatePeakFlux * OnsetDetector.peakReleaseRatio || flux < threshold {
++            emitOnset(peakFlux: candidatePeakFlux,
++                      thresholdAtPeak: candidateThresholdAtPeak,
++                      peakSample: candidatePeakSample)
++            lastOnsetSample = candidatePeakSample
++            inCandidate = false
++        }
++    }
++
++    private func emitOnset(peakFlux: Float, thresholdAtPeak: Float, peakSample: Int64) {
++        let hostSecondsAtPeak = hostSeconds(forSample: peakSample)
++        let hostTimeMs = hostSecondsAtPeak * 1_000
++
++        // strength: how far above the noise-floor estimate this peak sat,
++        // squashed into 0..1. `thresholdAtPeak` already carries the local
++        // mean+k·std; dividing by a few multiples of it keeps a light tap
++        // well below 1 and a hard hit near it.
++        let ratio = peakFlux / max(thresholdAtPeak * 3, 1e-6)
++        let strength = Double(min(max(ratio, 0), 1))
++
++        onsetHandler?(hostTimeMs, strength)
++    }
++}

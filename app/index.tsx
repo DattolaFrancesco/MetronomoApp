@@ -26,6 +26,7 @@ import type { InputSource } from "@/lib/rhythm-detection";
 import { tourTheme } from "@/lib/tour-theme";
 import { Ionicons } from "@expo/vector-icons";
 import { TourTarget, useTourGuide, type TourStep } from "@wrack/react-native-tour-guide";
+import { setAudioModeAsync } from "expo-audio";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -533,6 +534,20 @@ export default function Home() {
         setSyncOffsetMs(null);
         setCountInBeat(null);
         setPhase("countIn");
+        // Mic mode's native onset detector taps the *same* AVAudioEngine
+        // start() below launches (see MetronomeEngine.startOnsetDetection) —
+        // it needs the session already in .playAndRecord at that moment,
+        // not fixed up afterwards. SyncRecorder's own prep effect also
+        // calls this (for permission + as a safety net), but that runs
+        // async off the isArmed prop flip below and isn't guaranteed to
+        // land before this start() — awaiting it here first is what
+        // actually guarantees the ordering.
+        if (inputMode === "microphone") {
+          await setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+          });
+        }
         await start(bpm);
       }
     } finally {
