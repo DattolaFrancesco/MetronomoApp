@@ -1058,10 +1058,20 @@ export default function SyncRecorder({
           // real events/hitDiagnostics along with it.
           ExpoPrecisionMetronomeModule.getCaptureEnvelope()
             .then((snap) => {
+              // startOffsetMs follows the same sign convention as
+              // SessionSummary.leadInMs: positive when values[0] sits
+              // *before* true beat 1 (the normal case — the native tap
+              // starts during the lead-in beat) — i.e.
+              // sessionStartHostMs - snap.startHostMs, not the reverse.
+              // Getting this backwards shifts the whole displayEnvelope
+              // trace forward by 2x the real offset relative to the
+              // (correctly-computed) onset markers, which is exactly what
+              // made early hits' real humps appear to land under later
+              // hits' onset lines instead of their own.
               const displayEnvelope: DisplayEnvelope = {
                 values: snap.values,
                 hopMs: snap.hopMs,
-                startOffsetMs: snap.startHostMs - sessionStartHostMs,
+                startOffsetMs: sessionStartHostMs - snap.startHostMs,
               };
               onSessionEndRef.current?.({ ...baseSummary, displayEnvelope });
             })

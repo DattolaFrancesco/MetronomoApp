@@ -49,7 +49,24 @@ const SIXTEENTH_TICK_COLOR = "rgba(255,255,255,0.16)";
 // unlike that fixed decorative ruler, these are real onset-capture
 // positions of the session that was actually recorded.
 const SUBDIVISION_SECONDARY_TICK_COLOR = "rgba(255,255,255,0.3)";
-const WAVEFORM_FILL_COLOR = "rgba(255,138,128,0.35)";
+const WAVEFORM_FILL_COLOR = "rgba(255,138,128,0.55)";
+// Outline traced over the same fill shape so a peak still reads clearly even
+// when it's short — a lightly-tinted fill alone all but disappears for the
+// quieter parts of a real waveform. Display-only, same as the boost below:
+// neither touches the amplitude data itself, just how tall/visible it draws.
+const WAVEFORM_STROKE_COLOR = "rgba(255,138,128,0.9)";
+const WAVEFORM_STROKE_WIDTH = 1.5;
+
+// Perceptual boost for the drawn height only — real waveform/envelope
+// amplitudes are usually clustered in the lower part of the 0..1 range
+// (most everyday sounds sit well under 0dBFS), which reads as a nearly
+// flat line at a linear 1:1 scale. Square-rooting expands the quiet-to-
+// moderate range visually — a value of 0.09, say, draws at 0.3 instead of
+// vanishing — without changing the underlying number anywhere it's
+// actually read for detection (this file only ever draws it).
+function boostForDisplay(value: number): number {
+  return Math.sqrt(clamp(value, 0, 1));
+}
 
 // Same normalization sync-recorder.tsx's own SILENCE_FLOOR_DB applies to
 // the legacy metering-based waveform, reused here so an iOS mic session's
@@ -220,7 +237,7 @@ export default function DebugChart({
         for (let b = firstBucket; b <= lastBucket; b++) {
           const trueTime = b * hopMs - offsetMs;
           const x = (trueTime - barStart) * rowPxPerMs;
-          const y = baseline - Math.max(1, valueAt(b) * CHART_HEIGHT);
+          const y = baseline - Math.max(1, boostForDisplay(valueAt(b)) * CHART_HEIGHT);
           if (b === firstBucket) {
             waveformPath.moveTo(x, baseline);
             waveformPath.lineTo(x, y);
@@ -405,6 +422,12 @@ export default function DebugChart({
             <View style={{ width, height: CHART_TOTAL_HEIGHT }}>
               <Canvas style={{ width, height: CHART_TOTAL_HEIGHT }}>
                 <Path path={row.waveformPath} color={WAVEFORM_FILL_COLOR} style="fill" />
+                <Path
+                  path={row.waveformPath}
+                  color={WAVEFORM_STROKE_COLOR}
+                  style="stroke"
+                  strokeWidth={WAVEFORM_STROKE_WIDTH}
+                />
                 <Path path={row.sixteenthTickPath} color={SIXTEENTH_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.subdivisionSecondaryTickPath} color={SUBDIVISION_SECONDARY_TICK_COLOR} style="stroke" strokeWidth={1} />
                 <Path path={row.quarterTickPath} color={QUARTER_TICK_COLOR} style="stroke" strokeWidth={1} />

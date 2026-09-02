@@ -503,6 +503,7 @@ function ChallengeSession({
               summary.onsetTimesMs,
               summary.onsetStrengths ?? [],
               summary.bpm,
+              summary.displayEnvelope,
             )
           : scoreChallenge(challenge, summary.waveform, summary.bpm, summary.leadInMs);
     setResult(scored);

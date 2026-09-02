@@ -14,6 +14,7 @@ import {
   analyzeSession,
   BEATS_PER_BAR,
   currentWindowHalfMs,
+  type DisplayEnvelope,
   evaluatedSubBeats,
   type ExpectedHit,
   type HitDiagnostic,
@@ -693,6 +694,13 @@ export function scoreChallengeFromOnsets(
   onsetTimesMs: number[],
   onsetStrengths: number[],
   bpm: number,
+  // The whole session's fine RMS trace (see SessionSummary.displayEnvelope)
+  // — optional only so a caller mid-migration/without one still compiles;
+  // every real iOS mic Challenge session has one. Rebased per bar below
+  // (same reasoning as scoreChallenge's own groupLeadInMs) so each
+  // debugGroup's chart draws the slice of real audio around *its own* bar
+  // instead of the whole session's.
+  envelope?: DisplayEnvelope,
 ): ChallengeResult {
   const beatIntervalMs = 60000 / bpm;
   const barDurationMs = beatIntervalMs * BEATS_PER_BAR;
@@ -811,6 +819,18 @@ export function scoreChallengeFromOnsets(
         inputSource: "microphone",
         onsetTimesMs: kept,
         onsetStrengths: keptStrengths,
+        displayEnvelope: envelope
+          ? {
+              values: envelope.values,
+              hopMs: envelope.hopMs,
+              // See this function's own `envelope` param comment: bucket 0
+              // sits `envelope.startOffsetMs` before the *whole session's*
+              // beat 1, but this bar starts `barIndex * barDurationMs`
+              // later than that — so bucket 0 sits that much further
+              // before *this bar's* own local elapsedMs=0.
+              startOffsetMs: envelope.startOffsetMs + barIndex * barDurationMs,
+            }
+          : undefined,
       },
     });
   }
