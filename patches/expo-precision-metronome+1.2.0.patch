@@ -270,7 +270,7 @@ index f0e30dc..69ce811 100644
      }
  }
 diff --git a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
-index 84cec22..73834cc 100644
+index 84cec22..98573b2 100644
 --- a/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
 +++ b/node_modules/expo-precision-metronome/ios/MetronomeEngine.swift
 @@ -1,14 +1,26 @@
@@ -490,7 +490,7 @@ index 84cec22..73834cc 100644
          scheduler.reset()
  
          guard let format = AVAudioFormat(standardFormatWithSampleRate: sr, channels: 1) else {
-@@ -114,21 +288,87 @@ final class MetronomeEngine {
+@@ -114,21 +288,98 @@ final class MetronomeEngine {
                  userInfo: [NSLocalizedDescriptionKey: "Failed to create audio format for sample rate \(sr)"]
              )
          }
@@ -535,7 +535,18 @@ index 84cec22..73834cc 100644
 +        // beat scheduler mid-session. Referencing it here costs nothing and
 +        // makes the engine provision both directions from the start, so
 +        // startOnsetDetection's later access just works.
-+        _ = newEngine.inputNode
++        //
++        // ONLY when the session is actually .playAndRecord, though: on a
++        // real device, referencing inputNode with a .playback-only session
++        // (the app's Tap mode never asks for the mic) makes the following
++        // newEngine.start() throw kAudioUnitErr_CannotDoInCurrentContext —
++        // there is no input side to provision. Mic mode always has
++        // .playAndRecord in place by this point (the app awaits
++        // setAudioModeAsync({ allowsRecording: true }) before start()), so
++        // onset detection is unaffected.
++        if session.category == .playAndRecord {
++            _ = newEngine.inputNode
++        }
 +
          try newEngine.start()
  
@@ -583,7 +594,7 @@ index 84cec22..73834cc 100644
      }
  
      private func renderOngoingClick(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
-@@ -148,7 +388,80 @@ final class MetronomeEngine {
+@@ -148,7 +399,80 @@ final class MetronomeEngine {
          if clickPhase >= clickDurationSamples { clickPhase = -1 }
      }
  
@@ -664,7 +675,7 @@ index 84cec22..73834cc 100644
          frameCount: Int,
          audioBufferList: UnsafeMutablePointer<AudioBufferList>
      ) -> OSStatus {
-@@ -161,7 +474,18 @@ final class MetronomeEngine {
+@@ -161,7 +485,18 @@ final class MetronomeEngine {
          let bpm = currentBPM
          let bufferStart = currentSample
  
@@ -683,7 +694,7 @@ index 84cec22..73834cc 100644
  
          if let (offset, beatNumber) = scheduler.nextBeat(
              frameCount: frameCount,
-@@ -188,10 +512,25 @@ final class MetronomeEngine {
+@@ -188,10 +523,25 @@ final class MetronomeEngine {
              clickAccent = ap
              clickPhase = toWrite < dur ? toWrite : -1
  
@@ -710,7 +721,7 @@ index 84cec22..73834cc 100644
              }
          }
  
-@@ -199,37 +538,85 @@ final class MetronomeEngine {
+@@ -199,37 +549,85 @@ final class MetronomeEngine {
          return noErr
      }
  

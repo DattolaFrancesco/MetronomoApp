@@ -534,21 +534,40 @@ export default function Home() {
         setSyncOffsetMs(null);
         setCountInBeat(null);
         setPhase("countIn");
-        // Mic mode's native onset detector taps the *same* AVAudioEngine
-        // start() below launches (see MetronomeEngine.startOnsetDetection) —
-        // it needs the session already in .playAndRecord at that moment,
-        // not fixed up afterwards. SyncRecorder's own prep effect also
-        // calls this (for permission + as a safety net), but that runs
-        // async off the isArmed prop flip below and isn't guaranteed to
-        // land before this start() — awaiting it here first is what
-        // actually guarantees the ordering.
-        if (inputMode === "microphone") {
-          await setAudioModeAsync({
-            allowsRecording: true,
-            playsInSilentMode: true,
-          });
+        try {
+          // Both modes configure and activate the shared AVAudioSession
+          // *before* the native engine's start(). Going straight to start()
+          // from a cold session — letting the engine's own
+          // setCategory/setActive race its launch — intermittently fails on
+          // iOS with kAudioUnitErr_CannotDoInCurrentContext, which left Tap
+          // mode wedged on a count-in that never produced a beat (mic mode
+          // already did this step, so only Tap was exposed).
+          //
+          // Mic mode's native onset detector taps that *same* AVAudioEngine
+          // (see MetronomeEngine.startOnsetDetection), so it specifically
+          // needs .playAndRecord in place at that moment; Tap mode only
+          // needs playback that ignores the mute switch. SyncRecorder's own
+          // prep effect also calls setAudioModeAsync (for permission + as a
+          // safety net), but that runs async off the isArmed prop flip below
+          // and isn't guaranteed to land before this start() — awaiting it
+          // here first is what actually guarantees the ordering.
+          if (inputMode === "microphone") {
+            await setAudioModeAsync({
+              allowsRecording: true,
+              playsInSilentMode: true,
+            });
+          } else {
+            await setAudioModeAsync({ playsInSilentMode: true });
+          }
+          await start(bpm);
+        } catch (err) {
+          // Roll back to idle so the Tap button is pressable again for a
+          // retry, instead of stuck on a count-in that will never advance.
+          console.warn("[Timing] metronome start failed", err);
+          await stop().catch(() => {});
+          setPhase("idle");
+          setCountInBeat(null);
         }
-        await start(bpm);
       }
     } finally {
       togglingRef.current = false;

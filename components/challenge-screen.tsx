@@ -31,6 +31,7 @@ import {
 import type { InputSource } from "@/lib/rhythm-detection";
 import { tourTheme } from "@/lib/tour-theme";
 import { TourTarget, useTourGuide, type TourStep } from "@wrack/react-native-tour-guide";
+import { setAudioModeAsync } from "expo-audio";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import ExpoPrecisionMetronomeModule, {
@@ -440,7 +441,34 @@ function ChallengeSession({
       setResult(null);
       setCountInBeat(null);
       setPhase("countIn");
-      await start(bpm);
+      try {
+        // Configure + activate the shared AVAudioSession BEFORE start(),
+        // exactly like app/index.tsx's togglePlay. If the category is only
+        // flipped *after* start() — e.g. SyncRecorder's own prep effect
+        // calling setAudioModeAsync({ allowsRecording: true }) once armed,
+        // while the metronome engine is already running — the resulting
+        // AVAudioEngineConfigurationChange relaunches the native engine and
+        // resets its beat scheduler mid-count-in, so the count-in visibly
+        // starts over. That's the "double count-in" seen the first time mic
+        // mode is used in a Challenge, before the session is already
+        // .playAndRecord from an earlier run. Tap mode needs the session
+        // prepared here too (see the same fix in togglePlay).
+        if (inputMode === "microphone") {
+          await setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+          });
+        } else {
+          await setAudioModeAsync({ playsInSilentMode: true });
+        }
+        await start(bpm);
+      } catch (err) {
+        // Roll back to idle instead of leaving a count-in that never advances.
+        console.warn("[Timing] challenge metronome start failed", err);
+        await stop().catch(() => {});
+        setPhase("idle");
+        setCountInBeat(null);
+      }
     } finally {
       togglingRef.current = false;
     }
